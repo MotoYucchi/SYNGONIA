@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    canvas { display: block; width: 100vw; height: 100vh; position: absolute; top:0; left:0; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "shape", "label": "図形", "type": "select", "options": ["Diamond", "Circle", "Hexagon", "Eye"], "default": "Diamond" },
+      { "id": "size", "label": "最大サイズ", "type": "range", "min": 100, "max": 2000, "step": 10, "default": 800 },
+      { "id": "thickness", "label": "基本の太さ", "type": "range", "min": 1, "max": 500, "step": 1, "default": 200 },
+      { "id": "color", "label": "色", "type": "color", "default": "#00ff33" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+      { "id": "reactLow", "label": "低音 -> 開口 (細くなる)", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 2.0 },
+      { "id": "reactMid", "label": "中音 -> サイズ拡大", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.0 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height, cx, cy;
+    
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      cx = width / 2; cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { shape: "Diamond", size: 800, thickness: 200, color: "#00ff33", opacity: 1.0, reactLow: 2.0, reactMid: 1.0 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+    function calculateModColor(layerHex, gRgb) {
+      const lRgb = hexToRgb(layerHex);
+      return `rgba(${(lRgb.r + gRgb.r)%256}, ${(lRgb.g + gRgb.g)%256}, ${(lRgb.b + gRgb.b)%256}, ${params.opacity})`;
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color', 'shape'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    let smoothThick = 200;
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3]) / 3 / 255.0 || 0;
+      let midSum = 0; for(let i=20; i<=30; i++) midSum += currentFFT[i];
+      const mid = (midSum / 11) / 255.0 || 0;
+      
+      ctx.clearRect(0, 0, width, height);
+
+      const drawColor = calculateModColor(params.color, groupColorRgb);
+      ctx.strokeStyle = drawColor;
+      
+      const currentSize = params.size * (1 + mid * params.reactMid);
+      
+      // 低音で太さが「細くなる」＝中が開口する
+      const targetThick = Math.max(1, params.thickness - (bass * params.reactLow * params.thickness));
+      smoothThick += (targetThick - smoothThick) * 0.2;
+      
+      ctx.lineWidth = smoothThick;
+      
+      ctx.beginPath();
+      if (params.shape === "Diamond") {
+        ctx.moveTo(cx, cy - currentSize/2);
+        ctx.lineTo(cx + currentSize/2, cy);
+        ctx.lineTo(cx, cy + currentSize/2);
+        ctx.lineTo(cx - currentSize/2, cy);
+        ctx.closePath();
+      } else if (params.shape === "Circle") {
+        ctx.arc(cx, cy, currentSize/2, 0, Math.PI*2);
+      } else if (params.shape === "Hexagon") {
+        for(let i=0; i<6; i++) {
+          const angle = (i * Math.PI / 3) - Math.PI/2;
+          const px = cx + Math.cos(angle) * currentSize/2;
+          const py = cy + Math.sin(angle) * currentSize/2;
+          if (i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      } else if (params.shape === "Eye") {
+        // アーモンド形
+        ctx.moveTo(cx - currentSize/2, cy);
+        ctx.quadraticCurveTo(cx, cy - currentSize/2 - bass*200, cx + currentSize/2, cy);
+        ctx.quadraticCurveTo(cx, cy + currentSize/2 + bass*200, cx - currentSize/2, cy);
+      }
+      
+      ctx.stroke();
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

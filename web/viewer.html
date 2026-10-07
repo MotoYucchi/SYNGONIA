@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYNGONIA — Screen Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      user-select: none;
+    }
+
+    #stage {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Video Player Layer */
+    #video-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+    }
+
+    /* Canvas FX Layer */
+    #fx-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      mix-blend-mode: screen;
+    }
+
+    /* Emergency Blackout Overlay */
+    #blackout-overlay {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      z-index: 9999;
+      display: none;
+    }
+
+    #blackout-overlay.active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="video-layer" autoplay loop muted playsinline></video>
+    <canvas id="fx-canvas"></canvas>
+    <div id="blackout-overlay"></div>
+  </div>
+
+  <script>
+    const CLIENT_ID = 'viewer-' + crypto.randomUUID().slice(0, 8);
+    let ws = null;
+    let deckId = 'deck-a';
+    let currentDeck = [];
+    let isFreeze = false;
+    let currentFft = new Uint8Array(512);
+
+    const canvas = document.getElementById('fx-canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    const blackoutEl = document.getElementById('blackout-overlay');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // === WebSocket Connection ===
+    function connectWs() {
+      const loc = window.location;
+      const wsUri = (loc.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + loc.host + '/ws';
+      ws = new WebSocket(wsUri);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        sendWs({ type: 'request_sync', client_id: CLIENT_ID });
+      };
+
+      ws.onclose = () => {
+        setTimeout(connectWs, 1000);
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          // 512band FFT バイナリデータ
+          currentFft = new Uint8Array(event.data);
+        } else if (typeof event.data === 'string') {
+          handleIncomingJson(JSON.parse(event.data));
+        }
+      };
+    }
+
+    function sendWs(payload) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        payload.client_id = CLIENT_ID;
+        ws.send(JSON.stringify(payload));
+      }
+    }
+
+    function handleIncomingJson(msg) {
+      if (msg.type === 'snap_sync') {
+        if (msg.state && msg.state.decks && msg.state.decks[deckId]) {
+          currentDeck = msg.state.decks[deckId];
+        }
+        if (msg.state && msg.state.master) {
+          blackoutEl.classList.toggle('active', !!msg.state.master.blackout);
+          isFreeze = !!msg.state.master.freeze;
+        }
+      } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
+        currentDeck = msg.layers;
+      } else if (msg.type === 'param_update' && msg.deckId === deckId) {
+        if (!msg.layerId && msg.groupId) {
+          const g = currentDeck.find(grp => grp.id === msg.groupId);
+          if (g) {
+            if (!g.params) g.params = {};
+            g.params[msg.paramId] = msg.value;
+          }
+        }
+      } else if (msg.type === 'panic_action') {
+        if (msg.action === 'blackout') blackoutEl.classList.toggle('active', !!msg.value);
+        if (msg.action === 'freeze') isFreeze = !!msg.value;
+        if (msg.action === 'fx_kill') {
+          currentDeck.forEach(g => { if (g.params) g.params.opacity = 0; });
+        }
+      }
+    }
+
+    // === Render Loop (120fps 目標 & Audio Reactive 合成) ===
+    let time = 0;
+    function render() {
+      requestAnimationFrame(render);
+      if (isFreeze) return;
+
+      time += 0.016;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // FFT 解析 (Bass, Mid, High)
+      const bass = (currentFft[1] + currentFft[2] + currentFft[3] + currentFft[4]) / (4 * 255);
+      const mid  = (currentFft[20] + currentFft[25] + currentFft[30]) / (3 * 255);
+      const high = (currentFft[100] + currentFft[110]) / (2 * 255);
+
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // 各エフェクトチャンネルの描画
+      currentDeck.forEach((group, idx) => {
+        const opVal = (group.params && typeof group.params.opacity === 'number') ? group.params.opacity : 100;
+        const isMute = !!(group.params && group.params.mute);
+        if (opVal <= 0 || isMute) return; // ゼロ負荷スリープ
+
+        const alpha = opVal / 100;
+        const color = (group.params && group.params.color) || '#ffffff';
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+
+        // レイヤー別エフェクト演出 (Audio Reactive)
+        if (idx === 0) {
+          // CH 1: Glitch Core (Bass 連動パルス)
+          const radius = 100 + bass * 220;
+          ctx.lineWidth = 3 + high * 10;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.stroke();
+
+          // スライスグリッチ
+          if (high > 0.4) {
+            ctx.fillStyle = "rgba(0, 242, 254, 0.4)";
+            const sliceY = (Math.sin(time * 15) * 0.5 + 0.5) * canvas.height;
+            ctx.fillRect(0, sliceY, canvas.width, 24 * high);
+          }
+        } else if (idx === 1) {
+          // CH 2: Feedback Mirror (幾何学多層回転)
+          const sides = 6;
+          const r = 160 + mid * 180;
+          ctx.lineWidth = 2;
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(time * 0.8 + bass);
+          ctx.beginPath();
+          for (let i = 0; i < sides; i++) {
+            const angle = (i * Math.PI * 2) / sides;
+            const x = Math.cos(angle) * r;
+            const y = Math.sin(angle) * r;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+          ctx.restore();
+        } else if (idx === 2) {
+          // CH 3: Prism Warp (波形オーロラ)
+          ctx.beginPath();
+          ctx.lineWidth = 2 + mid * 6;
+          for (let x = 0; x < canvas.width; x += 15) {
+            const y = cy + Math.sin(x * 0.01 + time * 3) * (50 + bass * 120);
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        } else if (idx === 3) {
+          // CH 4: Impact Core (中央衝撃波)
+          if (bass > 0.25) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, 30 + bass * 80, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        ctx.restore();
+      });
+    }
+
+    connectWs();
+    render();
+  </script>
+</body>
+</html>

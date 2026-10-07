@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "particleCount", "label": "スパーク数", "type": "range", "min": 10, "max": 1000, "step": 10, "default": 200 },
+      { "id": "speed", "label": "飛散速度", "type": "range", "min": 1, "max": 50, "step": 1, "default": 15 },
+      { "id": "color", "label": "ベース色", "type": "color", "default": "#ffffff" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.9 },
+      { "id": "reactHigh", "label": "高音反応", "type": "range", "min": 0, "max": 10, "step": 0.1, "default": 5.0 },
+      { "id": "decay", "label": "減衰速度", "type": "range", "min": 0.5, "max": 0.99, "step": 0.01, "default": 0.85 },
+      { "id": "thickness", "label": "線の太さ", "type": "range", "min": 0.1, "max": 10, "step": 0.1, "default": 1.5 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { particleCount: 200, speed: 15, color: "#ffffff", opacity: 0.9, reactHigh: 5.0, decay: 0.85, thickness: 1.5 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    
+    let particles = [];
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function spawnBurst() {
+      const originX = Math.random() * width;
+      const originY = Math.random() * height;
+      const count = params.particleCount / 5; // Spawn a fraction of max per burst
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * params.speed + 1;
+        particles.push({
+          x: originX,
+          y: originY,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1.0,
+          px: originX,
+          py: originY
+        });
+      }
+    }
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      // High frequency bins (e.g., 200-250)
+      let highSum = 0;
+      for (let i = 200; i < 250; i++) highSum += currentFFT[i];
+      const high = (highSum / 50) / 255.0 || 0;
+      
+      // Trigger burst on sharp high notes
+      if (high > 0.3 * (1 / (params.reactHigh || 0.001)) && Math.random() < 0.2) {
+        spawnBurst();
+        spawnBurst(); // Multiple bursts for intensity
+      }
+
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = `rgba(0, 0, 0, 0.4)`; // Constant trail fade
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.globalCompositeOperation = "lighter";
+
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+      ctx.lineWidth = params.thickness;
+      ctx.lineCap = "round";
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        
+        p.px = p.x;
+        p.py = p.y;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life *= params.decay;
+
+        if (p.life < 0.01) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${p.life * params.opacity})`;
+        ctx.beginPath();
+        ctx.moveTo(p.px, p.py);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
+      // Limit array size
+      if (particles.length > params.particleCount) {
+        particles.splice(0, particles.length - params.particleCount);
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

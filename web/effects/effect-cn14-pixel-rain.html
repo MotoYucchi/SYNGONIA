@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {"id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0},
+      {"id": "scale", "label": "Scale", "type": "range", "min": 0.1, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "speed", "label": "Speed", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.0},
+      {"id": "intensity", "label": "Intensity", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "rotation", "label": "Rotation", "type": "range", "min": 0, "max": 360, "step": 1, "default": 0},
+      {"id": "color", "label": "Color", "type": "color", "default": "#ffffff"},
+      {"id": "audioGain", "label": "Audio Gain", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0},
+      {"id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0},
+      {"id": "dropCount", "label": "Drop Count", "type": "range", "min": 30, "max": 200, "step": 10, "default": 80}
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width = 1920, height = 1080, cx = 960, cy = 540;
+
+    function resize() {
+      width = canvas.width = Math.max(1, window.innerWidth || 1920);
+      height = canvas.height = Math.max(1, window.innerHeight || 1080);
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = {
+      opacity: 1.0,
+      scale: 1.0,
+      speed: 1.0,
+      intensity: 1.0,
+      rotation: 0,
+      blend: "source-over",
+      mirror: "None",
+      audioGain: 1.0,
+      color: "#ffffff",
+      shiftX: 0,
+      shiftY: 0
+    };
+
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let isVisible = true;
+    let isAnimating = true;
+    let time = 0;
+
+    
+    let drops = Array.from({length: 80}, () => ({
+      x: (Math.random() * 2 - 1) * 800,
+      y: (Math.random() * 2 - 1) * 500,
+      speed: 4 + Math.random() * 8,
+      len: 10 + Math.random() * 25
+    }));
+    
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    function calculateModColor(layerHex, gRgb, alpha = params.opacity) {
+      const lRgb = hexToRgb(layerHex || "#ffffff");
+      const r = (lRgb.r + (gRgb ? gRgb.r : 0)) % 256;
+      const g = (lRgb.g + (gRgb ? gRgb.g : 0)) % 256;
+      const b = (lRgb.b + (gRgb ? gRgb.b : 0)) % 256;
+      const safeAlpha = Math.max(0, Math.min(1, isNaN(alpha) ? 1.0 : Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === 'visibility') {
+        isVisible = !!msg.visible;
+        if (isVisible && !isAnimating) {
+          isAnimating = true;
+          requestAnimationFrame(render);
+        }
+        return;
+      }
+      if (msg.type === 'param_update') {
+        if (['color', 'blend', 'mirror', 'shape', 'mode'].includes(msg.paramId)) {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    
+
+    function render() {
+      if (!isVisible) {
+        isAnimating = false;
+        return;
+      }
+
+      if (width <= 1 || height <= 1) {
+        resize();
+        if (width <= 1 || height <= 1) {
+          requestAnimationFrame(render);
+          return;
+        }
+      }
+
+      // Audio analysis
+      const bass = ((currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0) * (params.audioGain || 1.0);
+      let midSum = 0; for(let i = 15; i <= 40; i++) midSum += currentFFT[i];
+      const mid = ((midSum / 26) / 255.0 || 0) * (params.audioGain || 1.0);
+      let highSum = 0; for(let i = 80; i <= 140; i++) highSum += currentFFT[i];
+      const high = ((highSum / 61) / 255.0 || 0) * (params.audioGain || 1.0);
+      const rms = (bass * 0.5 + mid * 0.35 + high * 0.15);
+
+      time += (params.speed !== undefined ? params.speed : 1.0) * 0.02;
+
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // Base translation and rotation
+      const shiftOffsetX = (params.shiftX || 0) / 100 * cx;
+      const shiftOffsetY = (params.shiftY || 0) / 100 * cy;
+      ctx.translate(cx + shiftOffsetX, cy + shiftOffsetY);
+      
+      if (params.rotation) {
+        ctx.rotate((params.rotation * Math.PI) / 180);
+      }
+
+      const baseScale = (params.scale || 1.0) * (1.0 + bass * 0.2 * (params.intensity || 1.0));
+      ctx.scale(baseScale, baseScale);
+
+      const drawColor = calculateModColor(params.color, groupColorRgb, params.opacity);
+
+      
+      ctx.fillStyle = drawColor;
+      for (let d of drops) {
+        d.y += d.speed * (1.0 + mid * 2.0 * params.intensity);
+        if (d.y > cy) {
+          d.y = -cy;
+          d.x = (Math.random() * 2 - 1) * cx;
+        }
+        const h = d.len * (1.0 + high * 2.0);
+        ctx.fillRect(d.x, d.y, 2.5, Math.max(1, h));
+      }
+    
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

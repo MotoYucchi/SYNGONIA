@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "particleCount", "label": "パーティクル数", "type": "range", "min": 10, "max": 100, "step": 1, "default": 50 },
+    { "id": "vortexSpeed", "label": "渦速度", "type": "range", "min": 0.1, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "radius", "label": "半径", "type": "range", "min": 50, "max": 500, "step": 1, "default": 200 },
+    { "id": "trailAlpha", "label": "残像強度", "type": "range", "min": 0.01, "max": 0.3, "step": 0.01, "default": 0.08 },
+    { "id": "dotSize", "label": "粒サイズ", "type": "range", "min": 1, "max": 20, "step": 0.5, "default": 4 },
+    { "id": "sizeReact", "label": "サイズ反応", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.5 },
+    { "id": "colorReactLow", "label": "Low→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 120 },
+    { "id": "colorReactMid", "label": "Mid→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 60 },
+    { "id": "colorReactHigh", "label": "High→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 30 },
+    { "id": "smoothing", "label": "スムージング", "type": "range", "min": 0.05, "max": 0.5, "step": 0.01, "default": 0.15 },
+    { "id": "color", "label": "ベース色", "type": "color", "default": "#8844ff" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height, cx, cy;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+  cx = width / 2;
+  cy = height / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let params = {
+  particleCount: 50, vortexSpeed: 1.5, radius: 200, trailAlpha: 0.08,
+  dotSize: 4, sizeReact: 1.5,
+  colorReactLow: 120, colorReactMid: 60, colorReactHigh: 30,
+  smoothing: 0.15, color: '#8844ff', opacity: 1.0,
+  shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let time = 0;
+let smoothLow = 0, smoothMid = 0, smoothHigh = 0;
+let prevLow = 0, prevMid = 0, prevHigh = 0;
+
+// パーティクル配列
+const MAX_PARTICLES = 100;
+let particles = [];
+
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    particles.push({
+      angle: Math.random() * Math.PI * 2,
+      dist: Math.random() * 200,
+      speed: 0.5 + Math.random() * 1.5,
+      layer: Math.random(),
+      size: 1
+    });
+  }
+}
+initParticles();
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 136, g: 68, b: 255 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) {
+    currentFFT = msg.fft;
+  } else if (msg.type === 'group_update') {
+    groupColorRgb = hexToRgb(msg.color);
+  }
+});
+
+function getLow() { let s = 0; for (let i = 0; i <= 10; i++) s += currentFFT[i]; return (s / 11) / 255; }
+function getMid() { let s = 0; for (let i = 20; i <= 60; i++) s += currentFFT[i]; return (s / 41) / 255; }
+function getHigh() { let s = 0; for (let i = 100; i <= 200; i++) s += currentFFT[i]; return (s / 101) / 255; }
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawLow = getLow();
+  const rawMid = getMid();
+  const rawHigh = getHigh();
+
+  const sm = params.smoothing;
+  smoothLow += (rawLow - smoothLow) * sm;
+  smoothMid += (rawMid - smoothMid) * sm;
+  smoothHigh += (rawHigh - smoothHigh) * sm;
+
+  const deltaLow = Math.abs(rawLow - prevLow);
+  const deltaMid = Math.abs(rawMid - prevMid);
+  const deltaHigh = Math.abs(rawHigh - prevHigh);
+  prevLow = rawLow; prevMid = rawMid; prevHigh = rawHigh;
+
+  time += 0.016;
+
+  // トレイル：半透明黒で残像
+  ctx.fillStyle = `rgba(0,0,0,${params.trailAlpha})`;
+  ctx.fillRect(0, 0, width, height);
+
+  const lRgb = hexToRgb(params.color);
+  const baseR = Math.min(255, lRgb.r + groupColorRgb.r);
+  const baseG = Math.min(255, lRgb.g + groupColorRgb.g);
+  const baseB = Math.min(255, lRgb.b + groupColorRgb.b);
+  const baseHue = (Math.atan2(baseB - 128, baseR - 128) * 180 / Math.PI + 360) % 360;
+
+  const shiftXPx = (params.shiftX / 100) * cx;
+  const shiftYPx = (params.shiftY / 100) * cy;
+  const centerX = cx + shiftXPx;
+  const centerY = cy + shiftYPx;
+
+  const baseRadius = params.radius * (1 + smoothLow * params.sizeReact);
+  const rotSpeed = params.vortexSpeed * (1 + smoothMid * 3);
+  const activeCount = Math.min(MAX_PARTICLES, Math.floor(params.particleCount + smoothHigh * 30));
+
+  for (let i = 0; i < activeCount; i++) {
+    const p = particles[i];
+
+    // 角度更新：渦回転
+    p.angle += p.speed * rotSpeed * 0.02;
+
+    // 距離のパルス
+    const baseDist = (p.layer * baseRadius);
+    const pulse = 1 + deltaLow * params.sizeReact * 2;
+    const dist = baseDist * pulse + Math.sin(time * 2 + p.layer * 10) * 20;
+
+    // 座標計算
+    const x = centerX + Math.cos(p.angle) * dist;
+    const y = centerY + Math.sin(p.angle) * dist;
+
+    // 色相計算：各帯域の反応 + パーティクルごとのオフセット
+    const hue = baseHue
+      + smoothLow * params.colorReactLow
+      + deltaMid * params.colorReactMid * 3
+      + deltaHigh * params.colorReactHigh * 5
+      + p.layer * 120;
+    const sat = 0.8 + smoothMid * 0.2;
+    const lit = 0.3 + smoothLow * 0.3 + deltaHigh * 0.3;
+    const rgb = hslToRgb(hue, sat, lit);
+
+    // サイズ
+    const size = params.dotSize * (1 + smoothLow * 1.5 + deltaLow * 3) * (0.5 + p.layer);
+    const alpha = params.opacity * (0.5 + smoothLow * 0.5);
+
+    // 描画
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+    ctx.fill();
+
+    // グロー（Low強い時）
+    if (smoothLow > 0.3) {
+      ctx.beginPath();
+      ctx.arc(x, y, size * 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha * 0.15})`;
+      ctx.fill();
+    }
+  }
+
+  // 中心グロー
+  if (smoothLow > 0.1) {
+    const glowSize = 40 + smoothLow * 100;
+    const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowSize);
+    const cRgb = hslToRgb(baseHue + smoothLow * params.colorReactLow, 0.9, 0.5);
+    grad.addColorStop(0, `rgba(${cRgb.r},${cRgb.g},${cRgb.b},${0.3 * params.opacity})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, glowSize, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

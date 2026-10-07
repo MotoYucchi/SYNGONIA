@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "sides", "label": "角数", "type": "range", "min": 3, "max": 12, "step": 1, "default": 6 },
+      { "id": "baseSize", "label": "基本サイズ", "type": "range", "min": 10, "max": 500, "step": 10, "default": 100 },
+      { "id": "reactLow", "label": "低音爆発", "type": "range", "min": 0, "max": 10, "step": 0.1, "default": 3.0 },
+      { "id": "color", "label": "色", "type": "color", "default": "#ffffff" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.9 },
+      { "id": "style", "label": "スタイル", "type": "select", "options": ["Solid", "Wireframe", "Glow"], "default": "Solid" },
+      { "id": "rotationSpeed", "label": "回転速度", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 0.5 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { sides: 6, baseSize: 100, reactLow: 3.0, color: "#ffffff", opacity: 0.9, style: "Solid", rotationSpeed: 0.5 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    
+    let activeBass = 0;
+    let angle = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color', 'style'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function drawPolygon(cx, cy, radius, sides, rot) {
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) {
+        const a = rot + (i / sides) * Math.PI * 2;
+        const x = cx + Math.cos(a) * radius;
+        const y = cy + Math.sin(a) * radius;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    }
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0;
+      activeBass = Math.max(activeBass * 0.85, bass); // Fast attack, slow release
+
+      ctx.clearRect(0, 0, width, height);
+
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+      const cx = width / 2;
+      const cy = height / 2;
+      const currentRadius = params.baseSize * (1 + activeBass * params.reactLow);
+
+      angle += params.rotationSpeed * 0.05 * (1 + activeBass * 2.0);
+
+      const colorStr = `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+
+      if (params.style === "Glow") {
+        ctx.shadowBlur = 50 * activeBass;
+        ctx.shadowColor = colorStr;
+        ctx.fillStyle = colorStr;
+        drawPolygon(cx, cy, currentRadius, params.sides, angle);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        // Draw expanding outer rings
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${params.opacity * activeBass})`;
+        ctx.lineWidth = 5;
+        drawPolygon(cx, cy, currentRadius * 1.5, params.sides, angle);
+        ctx.stroke();
+        drawPolygon(cx, cy, currentRadius * 2.0, params.sides, angle);
+        ctx.stroke();
+      } 
+      else if (params.style === "Wireframe") {
+        ctx.strokeStyle = colorStr;
+        ctx.lineWidth = 10 * (1 + activeBass * 2);
+        drawPolygon(cx, cy, currentRadius, params.sides, angle);
+        ctx.stroke();
+        
+        // Inner connected lines
+        ctx.beginPath();
+        for (let i = 0; i < params.sides; i++) {
+          const a = angle + (i / params.sides) * Math.PI * 2;
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(a) * currentRadius, cy + Math.sin(a) * currentRadius);
+        }
+        ctx.stroke();
+      } 
+      else {
+        // Solid
+        ctx.fillStyle = colorStr;
+        drawPolygon(cx, cy, currentRadius, params.sides, angle);
+        ctx.fill();
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

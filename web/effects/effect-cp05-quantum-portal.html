@@ -1,0 +1,233 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {"id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0},
+      {"id": "scale", "label": "Scale", "type": "range", "min": 0.1, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "speed", "label": "Cycle Speed", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.0},
+      {"id": "portalSize", "label": "Portal Size", "type": "range", "min": 50, "max": 400, "step": 10, "default": 180},
+      {"id": "prismAmount", "label": "Prism Amount", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.6},
+      {"id": "collapseRate", "label": "Collapse Force", "type": "range", "min": 0.5, "max": 2.5, "step": 0.1, "default": 1.2},
+      {"id": "color", "label": "Color", "type": "color", "default": "#9933ff"},
+      {"id": "audioGain", "label": "Audio Gain", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0}
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width = 1920, height = 1080, cx = 960, cy = 540;
+
+    function resize() {
+      width = canvas.width = Math.max(1, window.innerWidth || 1920);
+      height = canvas.height = Math.max(1, window.innerHeight || 1080);
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = {
+      opacity: 1.0,
+      scale: 1.0,
+      speed: 1.0,
+      portalSize: 180,
+      prismAmount: 0.6,
+      collapseRate: 1.2,
+      color: "#9933ff",
+      audioGain: 1.0
+    };
+
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let isVisible = true;
+    let isAnimating = true;
+    let time = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 153, g: 51, b: 255 };
+    }
+
+    function calculateModColor(layerHex, gRgb, alpha = params.opacity) {
+      const lRgb = hexToRgb(layerHex || "#9933ff");
+      const r = (lRgb.r + (gRgb ? gRgb.r : 0)) % 256;
+      const g = (lRgb.g + (gRgb ? gRgb.g : 0)) % 256;
+      const b = (lRgb.b + (gRgb ? gRgb.b : 0)) % 256;
+      const safeAlpha = Math.max(0, Math.min(1, isNaN(alpha) ? 1.0 : Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === 'visibility') {
+        isVisible = !!msg.visible;
+        if (isVisible && !isAnimating) {
+          isAnimating = true;
+          requestAnimationFrame(render);
+        }
+        return;
+      }
+      if (msg.type === 'param_update') {
+        if (['color'].includes(msg.paramId)) {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    function render() {
+      if (!isVisible) {
+        isAnimating = false;
+        return;
+      }
+
+      if (width <= 1 || height <= 1) {
+        resize();
+        if (width <= 1 || height <= 1) {
+          requestAnimationFrame(render);
+          return;
+        }
+      }
+
+      // Audio analysis
+      const bass = ((currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0) * (params.audioGain || 1.0);
+      let midSum = 0; for (let i = 15; i <= 40; i++) midSum += currentFFT[i];
+      const mid = ((midSum / 26) / 255.0 || 0) * (params.audioGain || 1.0);
+      let highSum = 0; for (let i = 80; i <= 140; i++) highSum += currentFFT[i];
+      const high = ((highSum / 61) / 255.0 || 0) * (params.audioGain || 1.0);
+
+      time += (params.speed !== undefined ? params.speed : 1.0) * 0.02;
+
+      // ── 4つのフェーズサイクル算出 (0.0〜1.0) ──
+      // Phase 1 (0.00-0.35): Stable
+      // Phase 2 (0.35-0.65): Distortion
+      // Phase 3 (0.65-0.88): Portal Open
+      // Phase 4 (0.88-1.00): Collapse & Flash
+      const cycle = (time * 0.15) % 1.0;
+      let collapseProgress = 0;
+      let flash = 0;
+
+      if (cycle >= 0.88) {
+        // Phase 4: Collapse to center
+        const t = (cycle - 0.88) / 0.12;
+        collapseProgress = Math.pow(t, 2.5) * (params.collapseRate || 1.2);
+        if (t > 0.85) flash = (t - 0.85) / 0.15;
+      }
+
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // Flash
+      if (flash > 0.01) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${flash * 0.8 * (params.opacity || 1.0)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      ctx.translate(cx, cy);
+      const baseScale = (params.scale || 1.0) * (1.0 - collapseProgress * 0.85);
+      ctx.scale(baseScale, baseScale);
+
+      const baseRad = (params.portalSize || 180) * (1.0 + bass * 0.35);
+      const prism = (params.prismAmount || 0.6) * (10 + high * 25);
+      const baseAlpha = params.opacity || 1.0;
+
+      ctx.globalCompositeOperation = "lighter";
+
+      // ── Copy 1: Inner Singularity (中心特異点) ──
+      ctx.save();
+      ctx.rotate(-time * 1.8);
+      ctx.lineWidth = 3 + high * 4;
+      ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, baseAlpha);
+      ctx.beginPath();
+      ctx.arc(0, 0, baseRad * 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // ── Copy 2: Prism Ring (スペクトラム色分散リング) ──
+      ctx.save();
+      ctx.rotate(time * 1.2);
+      ctx.lineWidth = 2 + mid * 3;
+      // 赤色分散
+      ctx.strokeStyle = `rgba(255, 30, 100, ${baseAlpha * 0.7})`;
+      ctx.beginPath();
+      ctx.arc(prism * 0.5, 0, baseRad * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      // 青色分散
+      ctx.strokeStyle = `rgba(0, 230, 255, ${baseAlpha * 0.7})`;
+      ctx.beginPath();
+      ctx.arc(-prism * 0.5, 0, baseRad * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // ── Copy 3: Event Horizon (事象の地平面・多角形境界) ──
+      ctx.save();
+      ctx.rotate(time * 0.6);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, baseAlpha * 0.9);
+      const sides = 12;
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) {
+        const a = (i / sides) * Math.PI * 2;
+        const r = baseRad * (0.8 + Math.sin(a * 4 + time * 3) * 0.1);
+        const px = Math.cos(a) * r;
+        const py = Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+
+      // ── Copy 4: Chromatic Flare (放射状プリズム放射光) ──
+      ctx.save();
+      ctx.rotate(-time * 0.8);
+      const rays = 16;
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < rays; i++) {
+        const a = (i / rays) * Math.PI * 2;
+        ctx.strokeStyle = (i % 2 === 0) ? `rgba(255, 100, 255, ${baseAlpha * 0.5})` : `rgba(100, 255, 255, ${baseAlpha * 0.5})`;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * baseRad * 0.5, Math.sin(a) * baseRad * 0.5);
+        ctx.lineTo(Math.cos(a) * baseRad * 1.4, Math.sin(a) * baseRad * 1.4);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // ── Copy 5: Outer Vortex (外周重力渦トンネル) ──
+      ctx.save();
+      ctx.rotate(time * 0.4);
+      ctx.lineWidth = 2 + high * 4;
+      ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, baseAlpha * 0.6);
+      for (let i = 1; i <= 3; i++) {
+        const spiralRad = baseRad * (1.1 + i * 0.3);
+        ctx.beginPath();
+        ctx.arc(0, 0, spiralRad, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {
+            "id": "shape",
+            "label": "Visualizer Type",
+            "type": "select",
+            "options": [
+                  "Bar",
+                  "Circle",
+                  "Line",
+                  "Waveform",
+                  "Dot",
+                  "Radial",
+                  "Nebula",
+                  "Ring",
+                  "Shockwave",
+                  "Equalizer"
+            ],
+            "default": "Bar"
+      },
+      {
+            "id": "color",
+            "label": "Base Color",
+            "type": "color",
+            "default": "#ff4500"
+      },
+      {
+            "id": "thickness",
+            "label": "Line Thickness",
+            "type": "range",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "default": 2
+      },
+      {
+            "id": "opacity",
+            "label": "Opacity",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "default": 1.0
+      },
+      {
+            "id": "sensitivity",
+            "label": "Sensitivity",
+            "type": "range",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.0
+      },
+      {
+            "id": "beatAnim",
+            "label": "Beat Animation",
+            "type": "select",
+            "options": [
+                  "None",
+                  "Scale",
+                  "Flash",
+                  "Shake"
+            ],
+            "default": "None"
+      },
+      {
+            "id": "reactLow",
+            "label": "Bass React",
+            "type": "range",
+            "min": 0,
+            "max": 3,
+            "step": 0.1,
+            "default": 1.0
+      },
+      {
+            "id": "hueSource",
+            "label": "Hue Band",
+            "type": "select",
+            "options": [
+                  "None",
+                  "Low",
+                  "Mid",
+                  "High"
+            ],
+            "default": "None"
+      },
+      {
+            "id": "hueAmount",
+            "label": "Hue Amount",
+            "type": "range",
+            "min": -360,
+            "max": 360,
+            "step": 1,
+            "default": 90
+      },
+      {
+            "id": "shiftX",
+            "label": "Shift X",
+            "type": "range",
+            "min": -100,
+            "max": 100,
+            "step": 1,
+            "default": 0
+      },
+      {
+            "id": "shiftY",
+            "label": "Shift Y",
+            "type": "range",
+            "min": -100,
+            "max": 100,
+            "step": 1,
+            "default": 0
+      }
+]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height, cx, cy;
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { shape: "Bar", color: "#ff4500", opacity: 1.0, sensitivity: 1.0, beatAnim: "None", reactLow: 1.0, hueSource: "None", hueAmount: 90, shiftX: 0, shiftY: 0, thickness: 2 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let shockwaves = [];
+
+    // --- Utility ---
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 0, b: 0 };
+    }
+
+    function getMixedColor(alpha = params.opacity) {
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    // --- Message Handling ---
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(draw);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        params[msg.paramId] = (['color', 'shape', 'beatAnim', 'hueSource'].includes(msg.paramId)) ? msg.value : Number(msg.value);
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    function draw() {
+      if (!isVisible) { isAnimating = false; return; }
+      ctx.clearRect(0, 0, width, height);
+      const bass = (currentFFT[0] + currentFFT[1] + currentFFT[2]) / 3 / 255;
+      const color = getMixedColor();
+      
+      ctx.save();
+      const shiftOffsetX = (params.shiftX || 0) / 100 * cx;
+      const shiftOffsetY = (params.shiftY || 0) / 100 * cy;
+      ctx.translate(shiftOffsetX, shiftOffsetY);
+      
+      // Beat Animation
+      if (params.beatAnim === "Scale") {
+        const s = 1 + (bass * params.reactLow * 0.2);
+        ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy);
+      } else if (params.beatAnim === "Shake") {
+        ctx.translate((Math.random()-0.5) * bass * 20, (Math.random()-0.5) * bass * 20);
+      }
+
+      ctx.fillStyle = ctx.strokeStyle = color;
+      ctx.lineWidth = params.thickness;
+
+      const binCount = 512;
+      const barWidth = width / (binCount / 2);
+
+      switch (params.shape) {
+        case "Bar":
+          for (let i = 0; i < binCount / 2; i++) {
+            const h = currentFFT[i] * params.sensitivity;
+            ctx.fillRect(i * barWidth, height - h, barWidth - 1, h);
+          }
+          break;
+
+        case "Circle":
+          ctx.translate(cx, cy);
+          for (let i = 0; i < binCount / 2; i++) {
+            const angle = (i / (binCount / 2)) * Math.PI * 2;
+            const h = currentFFT[i] * params.sensitivity;
+            ctx.rotate(angle);
+            ctx.fillRect(100, -1, h, 2);
+            ctx.rotate(-angle);
+          }
+          break;
+
+        case "Line":
+          ctx.beginPath();
+          for (let i = 0; i < binCount / 2; i++) {
+            const x = (i / (binCount / 2)) * width;
+            const y = height / 2 - (currentFFT[i] * params.sensitivity);
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          break;
+
+        case "Waveform":
+          ctx.beginPath();
+          for (let i = 0; i < binCount / 2; i++) {
+            const x = (i / (binCount / 2)) * width;
+            const offset = (currentFFT[i] - 128) * params.sensitivity;
+            const y = height / 2 + offset;
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          break;
+
+        case "Dot":
+          for (let i = 0; i < binCount / 2; i += 4) {
+            const x = (i / (binCount / 2)) * width;
+            const y = height - (currentFFT[i] * params.sensitivity);
+            ctx.beginPath();
+            ctx.arc(x, y, 2 + (bass * 5), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
+
+        case "Radial":
+          ctx.translate(cx, cy);
+          for (let i = 0; i < 360; i += 2) {
+            const val = currentFFT[i % binCount] * params.sensitivity;
+            const rad = (i * Math.PI) / 180;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(rad) * 50, Math.sin(rad) * 50);
+            ctx.lineTo(Math.cos(rad) * (50 + val), Math.sin(rad) * (50 + val));
+            ctx.stroke();
+          }
+          break;
+
+        case "Nebula":
+          ctx.globalCompositeOperation = 'lighter';
+          for (let i = 0; i < 20; i++) {
+            const idx = Math.floor(i * 10);
+            const val = currentFFT[idx] * params.sensitivity;
+            ctx.beginPath();
+            const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, val * 2);
+            grad.addColorStop(0, getMixedColor(0.2));
+            grad.addColorStop(1, 'transparent');
+            ctx.fillStyle = grad;
+            ctx.arc(cx + Math.sin(Date.now()*0.001 + i)*50, cy + Math.cos(Date.now()*0.0012 + i)*50, val * 2, 0, Math.PI*2);
+            ctx.fill();
+          }
+          break;
+
+        case "Ring":
+          const r = 100 + (currentFFT[5] * params.sensitivity);
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.lineWidth = (params.thickness + 3) + (bass * 20);
+          ctx.stroke();
+          break;
+
+        case "Shockwave":
+          if (bass > 0.8) shockwaves.push({ r: 0, a: 1.0 });
+          shockwaves.forEach((s, i) => {
+            s.r += 10; s.a -= 0.02;
+            ctx.beginPath();
+            ctx.strokeStyle = getMixedColor(s.a);
+            ctx.arc(cx, cy, s.r, 0, Math.PI * 2);
+            ctx.stroke();
+            if (s.a <= 0) shockwaves.splice(i, 1);
+          });
+          break;
+
+        case "Equalizer":
+          const eqBarW = width / 32;
+          for (let i = 0; i < 32; i++) {
+            const val = currentFFT[i * 8] * params.sensitivity;
+            ctx.fillRect(i * eqBarW, height/2 - val/2, eqBarW - 4, val);
+          }
+          break;
+      }
+
+      ctx.restore();
+      if (params.beatAnim === "Flash" && bass > 0.8) {
+        ctx.fillStyle = `rgba(255,255,255,${bass * 0.3})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+      
+      // --- Audio Reactive Hue ---
+      if (params.hueSource !== 'None') {
+        let _band = 0;
+        if (params.hueSource === 'Low') _band = (currentFFT[1]+currentFFT[2]+currentFFT[3])/3/255;
+        else if (params.hueSource === 'Mid') { let s=0; for(let i=20;i<=30;i++) s+=currentFFT[i]; _band=s/11/255; }
+        else if (params.hueSource === 'High') { let s=0; for(let i=100;i<=120;i++) s+=currentFFT[i]; _band=s/21/255; }
+        canvas.style.filter = 'hue-rotate(' + (_band * params.hueAmount) + 'deg)';
+      } else { canvas.style.filter = ''; }
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>

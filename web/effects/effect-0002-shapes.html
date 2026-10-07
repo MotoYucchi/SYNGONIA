@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {
+            "id": "shape",
+            "label": "Generator Type 2",
+            "type": "select",
+            "options": [
+                  "Cube",
+                  "Kaleidoscope",
+                  "Plasma",
+                  "Metaball",
+                  "CodeRain",
+                  "FractalTree"
+            ],
+            "default": "Cube"
+      },
+      {
+            "id": "speed",
+            "label": "Speed",
+            "type": "range",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.0
+      },
+      {
+            "id": "opacity",
+            "label": "Opacity",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "default": 1.0
+      },
+      {
+            "id": "color",
+            "label": "Base Color",
+            "type": "color",
+            "default": "#00ff00"
+      },
+      {
+            "id": "thickness",
+            "label": "Line Thickness",
+            "type": "range",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "default": 2
+      },
+      {
+            "id": "reactLow",
+            "label": "Bass React",
+            "type": "range",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.5
+      },
+      {
+            "id": "reactMid",
+            "label": "Mid React",
+            "type": "range",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.0
+      },
+      {
+            "id": "reactHigh",
+            "label": "High React",
+            "type": "range",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.0
+      },
+      {
+            "id": "hueSource",
+            "label": "Hue Band",
+            "type": "select",
+            "options": [
+                  "None",
+                  "Low",
+                  "Mid",
+                  "High"
+            ],
+            "default": "None"
+      },
+      {
+            "id": "hueAmount",
+            "label": "Hue Amount",
+            "type": "range",
+            "min": -360,
+            "max": 360,
+            "step": 1,
+            "default": 90
+      },
+      {
+            "id": "shiftX",
+            "label": "Shift X",
+            "type": "range",
+            "min": -100,
+            "max": 100,
+            "step": 1,
+            "default": 0
+      },
+      {
+            "id": "shiftY",
+            "label": "Shift Y",
+            "type": "range",
+            "min": -100,
+            "max": 100,
+            "step": 1,
+            "default": 0
+      }
+]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height, cx, cy;
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { shape: "Cube", speed: 1.0, opacity: 1.0, color: "#00ff00", reactLow: 1.5, reactMid: 1.0, reactHigh: 1.0, hueSource: "None", hueAmount: 90, shiftX: 0, shiftY: 0, thickness: 2 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let time = 0;
+
+    // --- 色計算 (effect-0000-circle.html 準拠) ---
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 0, b: 0 };
+    }
+
+    function calculateModColor(layerHex, gRgb) {
+      const lRgb = hexToRgb(layerHex);
+      const r = (lRgb.r + gRgb.r) % 256;
+      const g = (lRgb.g + gRgb.g) % 256;
+      const b = (lRgb.b + gRgb.b) % 256;
+      return `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+    }
+
+    // --- メッセージ受信 ---
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        params[msg.paramId] = (msg.paramId === 'color' || msg.paramId === 'shape' || msg.paramId === 'hueSource') ? msg.value : Number(msg.value);
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    // --- 形状データ ---
+    // Cube 頂点
+    const vertices = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+    const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+
+    // CodeRain 状態
+    let drops = Array.from({length: 50}, () => ({ x: Math.random(), y: Math.random(), speed: Math.random() * 0.02 + 0.01 }));
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      // FFT 解析 (effect-0000-circle.html のロジック)
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3]) / 3 / 255.0 || 0;
+      let midSum = 0; for(let i = 20; i <= 30; i++) midSum += currentFFT[i];
+      const mid = (midSum / 11) / 255.0 || 0;
+      let highSum = 0; for(let i = 100; i <= 120; i++) highSum += currentFFT[i];
+      const high = (highSum / 21) / 255.0 || 0;
+      // --- Audio Reactive Hue ---
+      let _hueVal = 0;
+      if (params.hueSource === 'Low') _hueVal = bass;
+      else if (params.hueSource === 'Mid') _hueVal = mid;
+      else if (params.hueSource === 'High') _hueVal = high;
+      const _hueDeg = _hueVal * params.hueAmount;
+      if (_hueDeg !== 0) canvas.style.filter = 'hue-rotate(' + _hueDeg + 'deg)';
+      else canvas.style.filter = '';
+
+      time += params.speed * 0.02;
+      const color = calculateModColor(params.color, groupColorRgb);
+      ctx.clearRect(0, 0, width, height);
+
+      ctx.save();
+      
+      // ユーザー要望のXYシフト機能
+      const shiftOffsetX = (params.shiftX || 0) / 100 * cx;
+      const shiftOffsetY = (params.shiftY || 0) / 100 * cy;
+      ctx.translate(shiftOffsetX, shiftOffsetY);
+
+      ctx.strokeStyle = ctx.fillStyle = color;
+
+      switch(params.shape) {
+        case "Cube":
+          ctx.translate(cx, cy);
+          const s = 150 * (1 + bass * params.reactLow);
+          const angleX = time;
+          const angleY = time * 0.7;
+          const projected = vertices.map(v => {
+            let x = v[0], y = v[1], z = v[2];
+            // Y軸回転
+            let tx = x * Math.cos(angleY) - z * Math.sin(angleY);
+            let tz = x * Math.sin(angleY) + z * Math.cos(angleY);
+            // X軸回転
+            let ty = y * Math.cos(angleX) - tz * Math.sin(angleX);
+            tz = y * Math.sin(angleX) + tz * Math.cos(angleX);
+            const p = 4 / (4 + tz);
+            return [tx * p * s, ty * p * s];
+          });
+          ctx.lineWidth = params.thickness + high * 10;
+          edges.forEach(e => {
+            ctx.beginPath();
+            ctx.moveTo(projected[e[0]][0], projected[e[0]][1]);
+            ctx.lineTo(projected[e[1]][0], projected[e[1]][1]);
+            ctx.stroke();
+          });
+          break;
+
+        case "Kaleidoscope":
+          const slices = 8;
+          ctx.translate(cx, cy);
+          for(let i=0; i<slices; i++) {
+            ctx.save();
+            ctx.rotate((i * Math.PI * 2) / slices);
+            if(i % 2) { ctx.scale(1, -1); }
+            ctx.beginPath();
+            ctx.moveTo(0,0);
+            const lineLen = 200 + mid * 300 * params.reactMid;
+            ctx.lineTo(lineLen, Math.sin(time) * 100);
+            ctx.lineWidth = (params.thickness + 3) + high * 20;
+            ctx.stroke();
+            ctx.restore();
+          }
+          break;
+
+        case "Plasma":
+          const cellSize = 20;
+          for(let x=0; x<width; x+=cellSize) {
+            for(let y=0; y<height; y+=cellSize) {
+              const v = Math.sin(x/50 + time) + Math.sin(y/30 + time) + Math.sin((x+y)/50 + time);
+              const alpha = (v + 3) / 6 * params.opacity * (0.5 + bass * 0.5);
+              ctx.globalAlpha = alpha;
+              ctx.fillRect(x, y, cellSize, cellSize);
+            }
+          }
+          break;
+
+        case "Metaball":
+          ctx.globalCompositeOperation = "lighter";
+          const balls = [
+            {x: cx + Math.sin(time)*100, y: cy + Math.cos(time*0.5)*100, r: 100 + bass * 200},
+            {x: cx - Math.sin(time*0.8)*150, y: cy - Math.cos(time*1.2)*50, r: 80 + mid * 150},
+            {x: cx + Math.cos(time*1.5)*200, y: cy + Math.sin(time)*80, r: 50 + high * 100}
+          ];
+          balls.forEach(b => {
+            const grad = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+            grad.addColorStop(0, color);
+            grad.addColorStop(1, "transparent");
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+          });
+          break;
+
+        case "CodeRain":
+          ctx.font = "20px monospace";
+          drops.forEach(d => {
+            const x = d.x * width;
+            const y = d.y * height;
+            const char = String.fromCharCode(0x30A0 + Math.random() * 96);
+            ctx.globalAlpha = (0.3 + high * 0.7) * params.opacity;
+            ctx.fillText(char, x, y);
+            d.y += d.speed * params.speed * (1 + bass * params.reactLow);
+            if(d.y > 1.1) d.y = -0.1;
+          });
+          break;
+
+        case "FractalTree":
+          ctx.translate(cx, height * 0.9);
+          const drawBranch = (len, angle, depth) => {
+            if(depth > 8) return;
+            ctx.lineWidth = depth === 0 ? params.thickness + 3 : params.thickness;
+            ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0, -len); ctx.stroke();
+            ctx.translate(0, -len);
+            ctx.save();
+            ctx.rotate(angle + mid * params.reactMid * 0.2);
+            drawBranch(len * 0.75, angle, depth + 1);
+            ctx.restore();
+            ctx.save();
+            ctx.rotate(-angle - mid * params.reactMid * 0.2);
+            drawBranch(len * 0.75, angle, depth + 1);
+            ctx.restore();
+          };
+          drawBranch(150 * (0.8 + bass * 0.4), 0.5, 0);
+          break;
+      }
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

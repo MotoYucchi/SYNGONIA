@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      width: 100vw;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="vj-canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "folder", "label": "Image フォルダ", "type": "select", "options": ["SummerNotes2026","CollegeNight-vol.9","CollegeNight-vol.10"], "default": "CollegeNight-vol.10" },
+      { "id": "imageIndex", "label": "画像インデックス", "type": "range", "min": 0, "max": 20, "step": 1, "default": 0 },
+      { "id": "aspectX", "label": "比率 X", "type": "range", "min": 1, "max": 32, "step": 1, "default": 16 },
+      { "id": "aspectY", "label": "比率 Y", "type": "range", "min": 1, "max": 32, "step": 1, "default": 9 },
+      { "id": "scale", "label": "基本スケール (1=Fit)", "type": "range", "min": 0.1, "max": 5.0, "step": 0.05, "default": 1.0 },
+      { "id": "reactLow", "label": "低音反応 (Scale)", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 0.8 },
+      { "id": "distortion", "label": "ぐにゃぐにゃ歪み", "type": "range", "min": 0, "max": 100, "step": 1, "default": 20 },
+      { "id": "distortSpeed", "label": "ぐにゃぐにゃ速度", "type": "range", "min": 0.1, "max": 5.0, "step": 0.1, "default": 1.5 },
+      { "id": "distortReact", "label": "音反応ぐにゃぐにゃ", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0 },
+      { "id": "glitch", "label": "RGBグリッチ強度", "type": "range", "min": 0, "max": 100, "step": 1, "default": 15 },
+      { "id": "glitchReact", "label": "音反応グリッチ", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.5 },
+      { "id": "autoSwitch", "label": "自動切り替え", "type": "select", "options": ["None", "Beat", "FastBeat", "Time5s"], "default": "None" },
+      { "id": "color", "label": "ベース色", "type": "color", "default": "#ffffff" },
+      { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+      { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('vj-canvas');
+    const ctx = canvas.getContext('2d');
+
+    // オフスクリーンキャンバス（画像保持・チャンネル処理用）
+    const offCanvas = document.createElement('canvas');
+    const offCtx = offCanvas.getContext('2d');
+
+    // システム状態パラメータ
+    let params = {
+      folder: 'CollegeNight-vol.9',
+      imageIndex: 0,
+      aspectX: 16,
+      aspectY: 9,
+      scale: 1.0,
+      reactLow: 0.8,
+      distortion: 20,
+      distortSpeed: 1.5,
+      distortReact: 1.0,
+      glitch: 15,
+      glitchReact: 1.5,
+      autoSwitch: 'None',
+      color: '#ffffff',
+      shiftX: 0,
+      shiftY: 0
+    };
+
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let currentFFT = new Array(512).fill(0);
+    let time = 0;
+
+    // 画像キャッシュ・リスト構造
+    let currentFolder = '';
+    let imageList = []; // [{ title: '...', file: '...' }]
+    let imageCache = {}; // { 'filename': Image }
+    let lastBeatTime = 0;
+    let beatCounter = 0;
+
+    // フォルダリスト動的読み込み
+    async function initFolderSelect() {
+      try {
+        const res = await fetch('/list_image_folders');
+        if (res.ok) {
+          const folders = await res.json();
+          if (folders && folders.length > 0) {
+            const schemaEl = document.getElementById('vj-schema');
+            if (schemaEl) {
+              const schema = JSON.parse(schemaEl.textContent);
+              const folderParam = schema.find(p => p.id === 'folder');
+              if (folderParam) {
+                folderParam.options = folders;
+                schemaEl.textContent = JSON.stringify(schema, null, 2);
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    initFolderSelect();
+
+    // フォルダの index.csv 読み込み
+    async function loadFolderIndex(folderName) {
+      if (!folderName || currentFolder === folderName) return;
+      currentFolder = folderName;
+      imageList = [];
+
+      try {
+        const res = await fetch(`/Image/${encodeURIComponent(folderName)}/index.csv`);
+        if (res.ok) {
+          const csvText = await res.text();
+          const lines = csvText.trim().split('\n');
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const cols = line.split(',');
+            if (cols.length >= 4) {
+              imageList.push({
+                title: cols[0].trim(),
+                file: cols[3].trim()
+              });
+            } else if (cols.length >= 1) {
+              const filename = cols[cols.length - 1].trim();
+              imageList.push({
+                title: filename,
+                file: filename
+              });
+            }
+          }
+          // 事前ロード
+          preloadImages(folderName);
+        }
+      } catch (err) {
+        console.warn('Failed to load image index:', err);
+      }
+    }
+
+    function preloadImages(folderName) {
+      imageList.forEach(item => {
+        const key = `${folderName}/${item.file}`;
+        if (!imageCache[key]) {
+          const img = new Image();
+          img.src = `/Image/${encodeURIComponent(folderName)}/${encodeURIComponent(item.file)}`;
+          imageCache[key] = img;
+        }
+      });
+    }
+
+    // 初期フォルダ読込
+    loadFolderIndex(params.folder);
+
+    // --- 色合成 helper (Modulo Math) ---
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+      } : { r: 255, g: 255, b: 255 };
+    }
+
+    function getModColorRgb(layerHex, gRgb) {
+      const lRgb = hexToRgb(layerHex);
+      return {
+        r: (lRgb.r + gRgb.r) % 256,
+        g: (lRgb.g + gRgb.g) % 256,
+        b: (lRgb.b + gRgb.b) % 256
+      };
+    }
+
+    // --- メッセージ受信 ---
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') {
+          document.body.style.opacity = msg.value;
+        } else if (msg.paramId === 'folder') {
+          params.folder = msg.value;
+          loadFolderIndex(params.folder);
+        } else if (msg.paramId === 'color' || msg.paramId === 'autoSwitch') {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    // リサイズ対応
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // --- メインレンダリングループ ---
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      time += 0.016 * (params.distortSpeed || 1.0);
+
+      // FFT解析
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0;
+      let midSum = 0;
+      for (let i = 20; i <= 35; i++) midSum += currentFFT[i];
+      const mid = (midSum / 16) / 255.0 || 0;
+      let highSum = 0;
+      for (let i = 100; i <= 140; i++) highSum += currentFFT[i];
+      const high = (highSum / 41) / 255.0 || 0;
+
+      // 自動画像切り替えロジック
+      let activeIndex = Math.floor(params.imageIndex || 0);
+      if (imageList.length > 0) {
+        if (params.autoSwitch === 'Time5s') {
+          activeIndex = Math.floor(Date.now() / 5000) % imageList.length;
+        } else if (params.autoSwitch === 'Beat' || params.autoSwitch === 'FastBeat') {
+          const threshold = params.autoSwitch === 'FastBeat' ? 0.35 : 0.55;
+          const cooldown = params.autoSwitch === 'FastBeat' ? 250 : 500;
+          if (bass > threshold && (Date.now() - lastBeatTime > cooldown)) {
+            beatCounter++;
+            lastBeatTime = Date.now();
+          }
+          activeIndex = beatCounter % imageList.length;
+        }
+        activeIndex = Math.max(0, Math.min(imageList.length - 1, activeIndex));
+      }
+
+      // 描画ターゲット画像の取得
+      let currentImage = null;
+      if (imageList.length > 0 && activeIndex < imageList.length) {
+        const item = imageList[activeIndex];
+        const key = `${params.folder}/${item.file}`;
+        currentImage = imageCache[key];
+      }
+
+      // キャンバスクリア
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (currentImage && currentImage.complete && currentImage.naturalWidth > 0) {
+        // --- 1. Contain Fit アスペクト比計算 (Scale = 1.0 で画面内にぎりぎり全て納まる) ---
+        const screenW = canvas.width;
+        const screenH = canvas.height;
+
+        const targetAspect = (params.aspectX || 16) / (params.aspectY || 9);
+        const screenAspect = screenW / screenH;
+
+        let baseW, baseH;
+        if (screenAspect > targetAspect) {
+          // 画面の方が横長 → 高さを基準にして画面全高に収める
+          baseH = screenH;
+          baseW = screenH * targetAspect;
+        } else {
+          // 画面の方が縦長 → 幅を基準にして画面全幅に収める
+          baseW = screenW;
+          baseH = screenW / targetAspect;
+        }
+
+        // 音連動 Scale 計算
+        const dynamicScale = (params.scale || 1.0) * (1.0 + bass * (params.reactLow || 0));
+        const finalW = baseW * dynamicScale;
+        const finalH = baseH * dynamicScale;
+
+        // 位置シフト計算
+        const shiftX = ((params.shiftX || 0) / 100) * (screenW / 2);
+        const shiftY = ((params.shiftY || 0) / 100) * (screenH / 2);
+        const centerX = screenW / 2 + shiftX;
+        const centerY = screenH / 2 + shiftY;
+
+        // --- 2. オフスクリーンキャンバスへ原寸画像をアスペクト比枠で準備 ---
+        const imgW = Math.floor(finalW);
+        const imgH = Math.floor(finalH);
+
+        if (imgW > 0 && imgH > 0) {
+          if (offCanvas.width !== imgW || offCanvas.height !== imgH) {
+            offCanvas.width = imgW;
+            offCanvas.height = imgH;
+          }
+          offCtx.clearRect(0, 0, imgW, imgH);
+          offCtx.drawImage(currentImage, 0, 0, imgW, imgH);
+
+          // Modulo Math 色調整（ホワイト以外の場合にカラーフィルタ適用）
+          const modColor = getModColorRgb(params.color || '#ffffff', groupColorRgb);
+          if (modColor.r !== 255 || modColor.g !== 255 || modColor.b !== 255) {
+            offCtx.globalCompositeOperation = 'multiply';
+            offCtx.fillStyle = `rgb(${modColor.r}, ${modColor.g}, ${modColor.b})`;
+            offCtx.fillRect(0, 0, imgW, imgH);
+            offCtx.globalCompositeOperation = 'destination-in';
+            offCtx.drawImage(currentImage, 0, 0, imgW, imgH);
+            offCtx.globalCompositeOperation = 'source-over';
+          }
+
+          // --- 3. ぐにゃぐにゃ変形（Wave / Mesh Distortion）描画 ---
+          const distortAmt = (params.distortion || 0) * (1.0 + (bass + mid) * (params.distortReact || 0));
+          const glitchAmt = (params.glitch || 0) * (1.0 + (bass + high) * (params.glitchReact || 0));
+
+          // RGBグリッチオフセット計算
+          const rxOffset = glitchAmt > 0 ? (Math.sin(time * 15) * 0.4 + (Math.random() - 0.5) * 0.6) * glitchAmt : 0;
+          const ryOffset = glitchAmt > 0 ? (Math.cos(time * 12) * 0.2 + (Math.random() - 0.5) * 0.4) * glitchAmt : 0;
+          const bxOffset = glitchAmt > 0 ? (-Math.sin(time * 18) * 0.4 + (Math.random() - 0.5) * 0.6) * glitchAmt : 0;
+
+          // 変形スライス描画関数
+          function drawDistortedImage(targetCtx, srcCanvas, offsetX, offsetY) {
+            const slices = 40; // 縦分割数
+            const sliceH = imgH / slices;
+
+            targetCtx.save();
+            targetCtx.translate(centerX + offsetX, centerY + offsetY);
+
+            for (let i = 0; i < slices; i++) {
+              const sy = i * sliceH;
+              const normalizedY = i / slices;
+
+              // サイン波 + ノイズによるぐにゃぐにゃ歪み X/Y
+              let dx = 0;
+              let dy = 0;
+              if (distortAmt > 0) {
+                dx = Math.sin(normalizedY * Math.PI * 4 + time * 3) * distortAmt * 0.5;
+                dx += Math.cos(normalizedY * Math.PI * 8 - time * 2) * distortAmt * 0.3;
+                dy = Math.sin(normalizedY * Math.PI * 3 + time * 4) * distortAmt * 0.2;
+              }
+
+              // スライス毎の瞬間的グリッチキック
+              if (glitchAmt > 5 && Math.random() < (glitchAmt / 400)) {
+                dx += (Math.random() - 0.5) * glitchAmt * 2.0;
+              }
+
+              const drawX = -imgW / 2 + dx;
+              const drawY = -imgH / 2 + sy + dy;
+
+              targetCtx.drawImage(
+                srcCanvas,
+                0, sy, imgW, sliceH + 0.5,
+                drawX, drawY, imgW, sliceH + 0.5
+              );
+            }
+            targetCtx.restore();
+          }
+
+          // グリッチ分離描画（RGB Channels）
+          if (glitchAmt > 1.0) {
+            // Channel R
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = 0.9;
+            drawDistortedImage(ctx, offCanvas, rxOffset, ryOffset);
+
+            // Channel G/B Overlap Glitch Effect
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = 0.8;
+            drawDistortedImage(ctx, offCanvas, -rxOffset * 0.5, -ryOffset * 0.5);
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = 0.7;
+            drawDistortedImage(ctx, offCanvas, bxOffset, -ryOffset * 0.8);
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = 1.0;
+          } else {
+            // 通常描画
+            drawDistortedImage(ctx, offCanvas, 0, 0);
+          }
+        }
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    render();
+  </script>
+</body>
+</html>

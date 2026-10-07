@@ -1,0 +1,322 @@
+[
+  {
+    "name": "0000 Circle",
+    "url": "effects/effect-0000-circle.html"
+  },
+  {
+    "name": "0001 Generator",
+    "url": "effects/effect-0001-generator.html"
+  },
+  {
+    "name": "0002 Shapes",
+    "url": "effects/effect-0002-shapes.html"
+  },
+  {
+    "name": "0003 Visualizer",
+    "url": "effects/effect-0003-visualizer.html"
+  },
+  {
+    "name": "0004 Utility",
+    "url": "effects/effect-0004-utility.html"
+  },
+  {
+    "name": "0005 Ambient",
+    "url": "effects/effect-0005-ambient.html"
+  },
+  {
+    "name": "0011 Polygon",
+    "url": "effects/effect-0011-polygon.html"
+  },
+  {
+    "name": "0012 Wireframe3D",
+    "url": "effects/effect-0012-wireframe3d.html"
+  },
+  {
+    "name": "0013 Kaleidoscope",
+    "url": "effects/effect-0013-kaleidoscope.html"
+  },
+  {
+    "name": "0014 Bubble",
+    "url": "effects/effect-0014-bubble.html"
+  },
+  {
+    "name": "0015 Kawaii",
+    "url": "effects/effect-0015-kawaii.html"
+  },
+  {
+    "name": "0016 Botanical",
+    "url": "effects/effect-0016-botanical.html"
+  },
+  {
+    "name": "0020 Image",
+    "url": "effects/effect-0020-image.html"
+  },
+  {
+    "name": "011 Camera Frame",
+    "url": "effects/effect-011-camera-frame.html"
+  },
+  {
+    "name": "012 Particles",
+    "url": "effects/effect-012-particles.html"
+  },
+  {
+    "name": "013 Sine Wave",
+    "url": "effects/effect-013-sine-wave.html"
+  },
+  {
+    "name": "014 Vertical Lines",
+    "url": "effects/effect-014-vertical-lines.html"
+  },
+  {
+    "name": "015 Opening Shape",
+    "url": "effects/effect-015-opening-shape.html"
+  },
+  {
+    "name": "B2B01 Watercolor",
+    "url": "effects/effect-b2b01-watercolor.html"
+  },
+  {
+    "name": "B2B02 Laser Clash",
+    "url": "effects/effect-b2b02-laser-clash.html"
+  },
+  {
+    "name": "B2B03 Ink Drop",
+    "url": "effects/effect-b2b03-ink-drop.html"
+  },
+  {
+    "name": "B2B04 Kawaii Pop",
+    "url": "effects/effect-b2b04-kawaii-pop.html"
+  },
+  {
+    "name": "B2B05 Cyber Grid",
+    "url": "effects/effect-b2b05-cyber-grid.html"
+  },
+  {
+    "name": "B2B06 Sweet Clouds",
+    "url": "effects/effect-b2b06-sweet-clouds.html"
+  },
+  {
+    "name": "B2B07 Speed Lines",
+    "url": "effects/effect-b2b07-speed-lines.html"
+  },
+  {
+    "name": "B2B08 Fractal Bloom",
+    "url": "effects/effect-b2b08-fractal-bloom.html"
+  },
+  {
+    "name": "B2B09 Glitch Split",
+    "url": "effects/effect-b2b09-glitch-split.html"
+  },
+  {
+    "name": "B2B10 Mellow Glow",
+    "url": "effects/effect-b2b10-mellow-glow.html"
+  },
+  {
+    "name": "Bass01 Pulsering",
+    "url": "effects/effect-bass01-pulsering.html"
+  },
+  {
+    "name": "Bass02 Shockwave",
+    "url": "effects/effect-bass02-shockwave.html"
+  },
+  {
+    "name": "Bass03 Quake",
+    "url": "effects/effect-bass03-quake.html"
+  },
+  {
+    "name": "Bass04 Woofer",
+    "url": "effects/effect-bass04-woofer.html"
+  },
+  {
+    "name": "Bass05 Ripple",
+    "url": "effects/effect-bass05-ripple.html"
+  },
+  {
+    "name": "Bass06 Strobe",
+    "url": "effects/effect-bass06-strobe.html"
+  },
+  {
+    "name": "Bass07 Gravity",
+    "url": "effects/effect-bass07-gravity.html"
+  },
+  {
+    "name": "Bass08 Tunnel",
+    "url": "effects/effect-bass08-tunnel.html"
+  },
+  {
+    "name": "Bass09 Grime",
+    "url": "effects/effect-bass09-grime.html"
+  },
+  {
+    "name": "Bass10 Oscilloscope",
+    "url": "effects/effect-bass10-oscilloscope.html"
+  },
+  {
+    "name": "Bass11 Impact Core",
+    "url": "effects/effect-bass11-impact-core.html"
+  },
+  {
+    "name": "Chill01 Flowwave",
+    "url": "effects/effect-chill01-flowwave.html"
+  },
+  {
+    "name": "Chill02 Glowdrift",
+    "url": "effects/effect-chill02-glowdrift.html"
+  },
+  {
+    "name": "Chill03 Auraring",
+    "url": "effects/effect-chill03-auraring.html"
+  },
+  {
+    "name": "Cn01 Circle Pulse",
+    "url": "effects/effect-cn01-circle-pulse.html"
+  },
+  {
+    "name": "Cn02 Line Flow",
+    "url": "effects/effect-cn02-line-flow.html"
+  },
+  {
+    "name": "Cn03 Scanline",
+    "url": "effects/effect-cn03-scanline.html"
+  },
+  {
+    "name": "Cn04 Dot Matrix",
+    "url": "effects/effect-cn04-dot-matrix.html"
+  },
+  {
+    "name": "Cn05 Triangle Mesh",
+    "url": "effects/effect-cn05-triangle-mesh.html"
+  },
+  {
+    "name": "Cn06 Hex Field",
+    "url": "effects/effect-cn06-hex-field.html"
+  },
+  {
+    "name": "Cn07 Grid Warp",
+    "url": "effects/effect-cn07-grid-warp.html"
+  },
+  {
+    "name": "Cn08 Crystal",
+    "url": "effects/effect-cn08-crystal.html"
+  },
+  {
+    "name": "Cn09 Ribbon",
+    "url": "effects/effect-cn09-ribbon.html"
+  },
+  {
+    "name": "Cn10 Wave Plane",
+    "url": "effects/effect-cn10-wave-plane.html"
+  },
+  {
+    "name": "Cn11 Tunnel",
+    "url": "effects/effect-cn11-tunnel.html"
+  },
+  {
+    "name": "Cn12 Ray Light",
+    "url": "effects/effect-cn12-ray-light.html"
+  },
+  {
+    "name": "Cn13 Particle Burst",
+    "url": "effects/effect-cn13-particle-burst.html"
+  },
+  {
+    "name": "Cn14 Pixel Rain",
+    "url": "effects/effect-cn14-pixel-rain.html"
+  },
+  {
+    "name": "Cn15 Noise Cloud",
+    "url": "effects/effect-cn15-noise-cloud.html"
+  },
+  {
+    "name": "Cn16 Feedback Mirror",
+    "url": "effects/effect-cn16-feedback-mirror.html"
+  },
+  {
+    "name": "Cn17 Kaleidoscope",
+    "url": "effects/effect-cn17-kaleidoscope.html"
+  },
+  {
+    "name": "Cn18 Voronoi",
+    "url": "effects/effect-cn18-voronoi.html"
+  },
+  {
+    "name": "Cn19 Fractal Bloom",
+    "url": "effects/effect-cn19-fractal-bloom.html"
+  },
+  {
+    "name": "Cn20 Glitch Block",
+    "url": "effects/effect-cn20-glitch-block.html"
+  },
+  {
+    "name": "Cp01 Mirror Collapse",
+    "url": "effects/effect-cp01-mirror-collapse.html"
+  },
+  {
+    "name": "Cp02 Neon Feedback",
+    "url": "effects/effect-cp02-neon-feedback.html"
+  },
+  {
+    "name": "Cp03 Kaleido Glitch",
+    "url": "effects/effect-cp03-kaleido-glitch.html"
+  },
+  {
+    "name": "Cp04 Beat Warp",
+    "url": "effects/effect-cp04-beat-warp.html"
+  },
+  {
+    "name": "Cp05 Quantum Portal",
+    "url": "effects/effect-cp05-quantum-portal.html"
+  },
+  {
+    "name": "Hard Song01 Radial",
+    "url": "effects/effect-hard-song01-radial.html"
+  },
+  {
+    "name": "High01 Stardust",
+    "url": "effects/effect-high01-stardust.html"
+  },
+  {
+    "name": "High02 Glass Shatter",
+    "url": "effects/effect-high02-glass-shatter.html"
+  },
+  {
+    "name": "Iv01 Prism",
+    "url": "effects/effect-iv01-prism.html"
+  },
+  {
+    "name": "Iv02 Hexgrid",
+    "url": "effects/effect-iv02-hexgrid.html"
+  },
+  {
+    "name": "Iv03 Laserwall",
+    "url": "effects/effect-iv03-laserwall.html"
+  },
+  {
+    "name": "Iv04 Vortex",
+    "url": "effects/effect-iv04-vortex.html"
+  },
+  {
+    "name": "Iv05 Glitchbar",
+    "url": "effects/effect-iv05-glitchbar.html"
+  },
+  {
+    "name": "Iv06 Cornerflash",
+    "url": "effects/effect-iv06-cornerflash.html"
+  },
+  {
+    "name": "Iv07 Edgerunner",
+    "url": "effects/effect-iv07-edgerunner.html"
+  },
+  {
+    "name": "Iv08 Framebeat",
+    "url": "effects/effect-iv08-framebeat.html"
+  },
+  {
+    "name": "Iv09 Trackarc",
+    "url": "effects/effect-iv09-trackarc.html"
+  },
+  {
+    "name": "Iv10 Sidepillar",
+    "url": "effects/effect-iv10-sidepillar.html"
+  }
+]

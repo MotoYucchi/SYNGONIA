@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      color: #fff;
+      font-family: 'Courier New', Courier, monospace;
+      font-weight: bold;
+    }
+
+    .frame-container {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      box-sizing: border-box;
+    }
+
+    /* Corner brackets */
+    .corner {
+      position: absolute;
+      width: 80px;
+      height: 80px;
+      border: 4px solid #fff;
+    }
+    .corner-tl { top: 40px; left: 40px; border-right: none; border-bottom: none; }
+    .corner-tr { top: 40px; right: 40px; border-left: none; border-bottom: none; }
+    .corner-bl { bottom: 40px; left: 40px; border-right: none; border-top: none; }
+    .corner-br { bottom: 40px; right: 40px; border-left: none; border-top: none; }
+
+    /* Crosshair center */
+    .crosshair {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 40px; height: 40px;
+      transform: translate(-50%, -50%);
+    }
+    .crosshair::before, .crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255, 255, 255, 0.4);
+    }
+    .crosshair::before { top: 19px; left: 0; width: 40px; height: 2px; }
+    .crosshair::after { top: 0; left: 19px; width: 2px; height: 40px; }
+
+    /* Top Left: REC & Time */
+    .top-left {
+      position: absolute;
+      top: 60px; left: 70px;
+      font-size: 1.5rem;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .rec-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .rec-dot {
+      width: 16px; height: 16px;
+      background: #ff3333;
+      border-radius: 50%;
+      animation: blink 1s infinite;
+      box-shadow: 0 0 10px #ff3333;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* Top Right: Battery, Res, FPS */
+    .top-right {
+      position: absolute;
+      top: 60px; right: 70px;
+      font-size: 1.2rem;
+      text-align: right;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .battery-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.4rem;
+    }
+    .battery-icon {
+      width: 40px; height: 20px;
+      border: 2px solid #fff;
+      border-radius: 3px;
+      position: relative;
+      padding: 2px;
+    }
+    .battery-icon::after {
+      content: '';
+      position: absolute;
+      right: -6px; top: 5px;
+      width: 4px; height: 10px;
+      background: #fff;
+      border-radius: 0 2px 2px 0;
+    }
+    .battery-level {
+      height: 100%;
+      background: #fff;
+    }
+
+    /* Bottom Left: DJ Info */
+    .bottom-left {
+      position: absolute;
+      bottom: 60px; left: 70px;
+      font-size: 1.3rem;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .dj-name { font-size: 1.8rem; font-weight: 900; letter-spacing: 2px; }
+    .dj-affil { font-size: 1.1rem; color: #ccc; }
+    .dj-x { font-size: 1.1rem; color: #1da1f2; }
+
+    /* Bottom Right: MENU */
+    .bottom-right {
+      position: absolute;
+      bottom: 60px; right: 70px;
+      font-size: 1.3rem;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+    }
+  </style>
+
+  <script type="application/json" id="vj-schema">
+    [
+      { "id": "event_time", "type": "text", "label": "Event Start (YYYY-MM-DDTHH:mm)", "default": "2026-06-24T00:00" },
+      { "id": "battery", "type": "range", "label": "Battery % (Drops 1%/10m)", "min": 0, "max": 100, "default": 87 },
+      { "id": "resolution", "type": "text", "label": "Resolution", "default": "1920x1080" },
+      { "id": "fps", "type": "text", "label": "FPS", "default": "24FPS" },
+      { "id": "base_size", "type": "number", "label": "Base Size (px)", "min": 10, "default": 20 },
+      { "id": "dj_index", "type": "select", "options": ["0: Loading..."], "label": "DJ Select", "default": "0: " },
+      { "id": "show_affil", "type": "checkbox", "label": "Show Affiliation", "default": true }
+    ]
+  </script>
+</head>
+<body>
+  <div class="frame-container">
+    <div class="corner corner-tl"></div>
+    <div class="corner corner-tr"></div>
+    <div class="corner corner-bl"></div>
+    <div class="corner corner-br"></div>
+    
+    <div class="crosshair"></div>
+
+    <div class="top-left">
+      <div class="rec-box">
+        <div class="rec-dot"></div>
+        <span>REC</span>
+      </div>
+      <div id="time-display">00:00:00</div>
+    </div>
+
+    <div class="top-right">
+      <div class="battery-box">
+        <div class="battery-icon">
+          <div class="battery-level" id="battery-level"></div>
+        </div>
+        <span id="battery-text">87%</span>
+      </div>
+      <div id="res-display">1920x1080</div>
+      <div id="fps-display">24FPS</div>
+    </div>
+
+    <div class="bottom-left">
+      <div class="dj-name" id="dj-name">DJ Name</div>
+      <div class="dj-affil" id="dj-affil">Affiliation</div>
+      <div class="dj-x" id="dj-x">X: @example</div>
+    </div>
+
+    <div class="bottom-right">
+      MENU ☷
+    </div>
+  </div>
+
+  <script>
+    let params = {
+      event_time: "2026-06-24T00:00",
+      battery: 87,
+      resolution: "1920x1080",
+      fps: "24FPS",
+      base_size: 20,
+      dj_index: 0,
+      show_affil: true
+    };
+
+    let djList = [];
+    let batteryLastSetTime = Date.now();
+    let currentBaseBattery = 87;
+
+    // Load CSV
+    async function loadDJList() {
+      try {
+        const res = await fetch('/config/dj-list.csv?t=' + Date.now());
+        if (!res.ok) return;
+        const text = await res.text();
+        const lines = text.trim().split('\n').slice(1); // skip header
+        djList = lines.map(line => {
+          const parts = line.split(',');
+          return {
+            name: parts[0]?.trim() || '',
+            affil: parts[1]?.trim() || '',
+            xid: parts[2]?.trim() || ''
+          };
+        });
+        updateDJDisplay();
+      } catch (e) {
+        console.error("Failed to load DJ list:", e);
+      }
+    }
+
+    function updateDJDisplay() {
+      if (djList.length === 0) return;
+      let idx = 0;
+      if (typeof params.dj_index === 'string') {
+        idx = parseInt(params.dj_index.split(':')[0], 10) || 0;
+      } else {
+        idx = params.dj_index || 0;
+      }
+      idx = Math.min(idx, djList.length - 1);
+      const dj = djList[idx];
+      document.getElementById('dj-name').textContent = dj.name;
+      document.getElementById('dj-affil').textContent = dj.affil;
+      document.getElementById('dj-x').textContent = `X: ${dj.xid}`;
+      
+      const displayAffil = params.show_affil && !dj.affil.includes('?');
+      document.getElementById('dj-affil').style.display = displayAffil ? 'block' : 'none';
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(updateFrame);
+      }
+      return;
+    }
+      if (msg.type === "param_update") {
+        const id = msg.paramId;
+        const val = msg.value;
+        params[id] = val;
+        
+        if (id === 'battery') {
+          currentBaseBattery = Number(val);
+          batteryLastSetTime = Date.now();
+        } else if (id === 'resolution') {
+          document.getElementById('res-display').textContent = val;
+        } else if (id === 'fps') {
+          document.getElementById('fps-display').textContent = val;
+        } else if (id === 'base_size') {
+          document.documentElement.style.fontSize = val + 'px';
+        } else if (id === 'dj_index' || id === 'show_affil') {
+          updateDJDisplay();
+        }
+      }
+    });
+
+    function updateFrame() {
+      if (!isVisible) { isAnimating = false; return; }
+      // 1. Time Logic
+      const eventDate = new Date(params.event_time);
+      if (!isNaN(eventDate.getTime())) {
+        const nowMs = Date.now();
+        const eventMs = eventDate.getTime();
+        const diffSec = Math.floor(Math.abs(nowMs - eventMs) / 1000);
+        const sign = nowMs >= eventMs ? "" : "-";
+        
+        const hh = String(Math.floor(diffSec / 3600)).padStart(2, '0');
+        const mm = String(Math.floor((diffSec % 3600) / 60)).padStart(2, '0');
+        const ss = String(diffSec % 60).padStart(2, '0');
+        
+        // Frame calculation (just mock 24fps looping 0-23)
+        const frame = String(Math.floor((Date.now() % 1000) / (1000/24))).padStart(2, '0');
+        
+        document.getElementById('time-display').textContent = `${sign}${hh}:${mm}:${ss}:${frame}`;
+      }
+
+      // 2. Battery Logic (drops 1% every 10 mins = 600000 ms)
+      const elapsedMs = Date.now() - batteryLastSetTime;
+      const drops = Math.floor(elapsedMs / 600000);
+      const currentBat = Math.max(0, currentBaseBattery - drops);
+      
+      document.getElementById('battery-text').textContent = `${currentBat}%`;
+      document.getElementById('battery-level').style.width = `${currentBat}%`;
+      if (currentBat <= 20) {
+        document.getElementById('battery-level').style.background = '#ff3333';
+      } else {
+        document.getElementById('battery-level').style.background = '#fff';
+      }
+
+      requestAnimationFrame(updateFrame);
+    }
+
+    loadDJList();
+    updateFrame();
+  </script>
+</body>
+</html>

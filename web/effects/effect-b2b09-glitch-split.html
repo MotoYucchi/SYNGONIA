@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "b2bMode", "label": "B2B Mode", "type": "select", "options": ["Left", "Right", "Center"], "default": "Left" },
+      { "id": "glitchIntensity", "label": "グリッチ強度", "type": "range", "min": 1, "max": 100, "step": 1, "default": 30 },
+      { "id": "color", "label": "色", "type": "color", "default": "#ffffff" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.9 },
+      { "id": "reactHigh", "label": "高音反応", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 3.0 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { b2bMode: "Left", glitchIntensity: 30, color: "#ffffff", opacity: 0.9, reactHigh: 3.0 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let time = 0;
+    
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color', 'b2bMode'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      let highSum = 0;
+      for (let i = 100; i < 200; i++) highSum += currentFFT[i];
+      const high = (highSum / 100) / 255.0 || 0;
+      
+      time += 0.1;
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "rgba(0,0,0,0.1)";
+      ctx.fillRect(0, 0, width, height);
+
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+      
+      const intensity = params.glitchIntensity * (1 + high * params.reactHigh);
+      
+      const cx = params.b2bMode === "Left" ? 0 : (params.b2bMode === "Right" ? width/2 : 0);
+      const drawWidth = params.b2bMode === "Center" ? width : width/2;
+
+      ctx.globalCompositeOperation = "lighter";
+      
+      for(let i=0; i<intensity; i++) {
+        if(Math.random() > 0.5) continue;
+        const bw = Math.random() * drawWidth;
+        const bh = Math.random() * 50;
+        const bx = cx + Math.random() * (drawWidth - bw);
+        const by = Math.random() * height;
+        
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+        ctx.fillRect(bx, by, bw, bh);
+        
+        // Random RGB shift
+        if(Math.random() < 0.2) {
+          ctx.fillStyle = `rgba(255, 0, 0, ${params.opacity})`;
+          ctx.fillRect(bx + (Math.random()-0.5)*50, by, bw, bh);
+        }
+        if(Math.random() < 0.2) {
+          ctx.fillStyle = `rgba(0, 255, 255, ${params.opacity})`;
+          ctx.fillRect(bx + (Math.random()-0.5)*50, by, bw, bh);
+        }
+      }
+
+      // Very sharp, blocky mask for glitch
+      if (params.b2bMode !== "Center") {
+        ctx.globalCompositeOperation = "destination-in";
+        const maskCx = width / 2;
+        const sign = params.b2bMode === "Left" ? -1 : 1;
+        
+        ctx.beginPath();
+        if (params.b2bMode === "Left") ctx.rect(0, 0, maskCx - 200, height);
+        else ctx.rect(maskCx + 200, 0, width, height);
+        ctx.fillStyle = "rgba(255,255,255,1)";
+        ctx.fill();
+
+        for(let y=0; y<height; y+=Math.random()*40+10) {
+          const bh = Math.random()*40+10;
+          const shift = (Math.random()-0.5) * 300 * (1 + high * params.reactHigh);
+          const fadeWidth = 200 + Math.random()*200;
+          
+          const maskGrad = ctx.createLinearGradient(maskCx + shift, 0, maskCx + shift + (fadeWidth * sign), 0);
+          maskGrad.addColorStop(0, "rgba(255,255,255,1)");
+          maskGrad.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = maskGrad;
+          ctx.fillRect(maskCx - 500, y, 1000, bh);
+          y += bh;
+        }
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

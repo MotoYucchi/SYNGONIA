@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "b2bMode", "label": "B2B Mode", "type": "select", "options": ["Left", "Right", "Center"], "default": "Left" },
+      { "id": "popCount", "label": "ポップ数", "type": "range", "min": 5, "max": 100, "step": 1, "default": 40 },
+      { "id": "color", "label": "色", "type": "color", "default": "#ff66cc" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.9 },
+      { "id": "speed", "label": "浮上速度", "type": "range", "min": 0, "max": 10, "step": 0.1, "default": 2.0 },
+      { "id": "reactMid", "label": "中音反応", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 2.0 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { b2bMode: "Left", popCount: 40, color: "#ff66cc", opacity: 0.9, speed: 2.0, reactMid: 2.0 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let time = 0;
+    
+    let pops = [];
+    const shapes = ['star', 'heart', 'circle'];
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color', 'b2bMode'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function spawnPop() {
+      const isLeft = params.b2bMode === "Left" || (params.b2bMode === "Center" && Math.random() > 0.5);
+      const bx = isLeft ? Math.random() * (width/2 + 200) - 100 : width/2 - 100 + Math.random() * (width/2 + 200);
+      pops.push({
+        x: bx,
+        y: height + 50,
+        s: 10 + Math.random() * 30,
+        shape: shapes[Math.floor(Math.random() * shapes.length)],
+        rot: Math.random() * Math.PI,
+        rv: (Math.random() - 0.5) * 0.1,
+        vy: params.speed * (0.5 + Math.random()) * -1,
+        vx: (Math.random() - 0.5) * 2
+      });
+    }
+
+    function drawStar(cx, cy, spikes, outerRadius, innerRadius) {
+      let rot = Math.PI / 2 * 3;
+      let x = cx, y = cy;
+      const step = Math.PI / spikes;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - outerRadius);
+      for (let i = 0; i < spikes; i++) {
+        x = cx + Math.cos(rot) * outerRadius;
+        y = cy + Math.sin(rot) * outerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+      }
+      ctx.lineTo(cx, cy - outerRadius);
+      ctx.closePath();
+    }
+
+    function drawHeart(x, y, size) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + size / 4);
+      ctx.quadraticCurveTo(x, y, x + size / 4, y);
+      ctx.quadraticCurveTo(x + size / 2, y, x + size / 2, y + size / 4);
+      ctx.quadraticCurveTo(x + size / 2, y + size / 2, x, y + size * 0.8);
+      ctx.quadraticCurveTo(x - size / 2, y + size / 2, x - size / 2, y + size / 4);
+      ctx.quadraticCurveTo(x - size / 2, y, x - size / 4, y);
+      ctx.quadraticCurveTo(x, y, x, y + size / 4);
+      ctx.closePath();
+    }
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      time += 0.05;
+      let midSum = 0;
+      for (let i = 20; i < 60; i++) midSum += currentFFT[i];
+      const mid = (midSum / 40) / 255.0 || 0;
+      
+      if (mid > 0.3 * (1/(params.reactMid||0.001)) && Math.random() < 0.4) spawnPop();
+      if (pops.length < params.popCount && Math.random() < 0.1) spawnPop();
+
+      ctx.clearRect(0, 0, width, height);
+      
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+
+      for (let i = pops.length - 1; i >= 0; i--) {
+        const p = pops[i];
+        p.x += p.vx;
+        p.y += p.vy * (1 + mid * params.reactMid);
+        p.rot += p.rv;
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        
+        const scale = 1 + mid * params.reactMid * 0.5;
+        ctx.scale(scale, scale);
+
+        if (p.shape === 'circle') {
+          ctx.beginPath(); ctx.arc(0, 0, p.s, 0, Math.PI*2); ctx.fill();
+        } else if (p.shape === 'star') {
+          drawStar(0, 0, 5, p.s, p.s/2); ctx.fill();
+        } else if (p.shape === 'heart') {
+          drawHeart(0, -p.s/2, p.s*2); ctx.fill();
+        }
+        
+        ctx.restore();
+
+        if (p.y < -100) pops.splice(i, 1);
+      }
+
+      // B2B Mask
+      if (params.b2bMode !== "Center") {
+        ctx.globalCompositeOperation = "destination-in";
+        const cx = width / 2;
+        const sign = params.b2bMode === "Left" ? -1 : 1;
+        const fadeWidth = 300;
+        
+        ctx.beginPath();
+        if (params.b2bMode === "Left") ctx.rect(0, 0, cx - fadeWidth/2, height);
+        else ctx.rect(cx + fadeWidth/2, 0, width, height);
+        ctx.fillStyle = "rgba(255,255,255,1)";
+        ctx.fill();
+
+        for(let y=0; y<height; y+=10) {
+          const wave = Math.sin(y*0.01 + time) * 40;
+          const maskGrad = ctx.createLinearGradient(cx + wave, 0, cx + wave + (fadeWidth * sign), 0);
+          maskGrad.addColorStop(0, "rgba(255,255,255,1)");
+          maskGrad.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = maskGrad;
+          ctx.fillRect(cx - fadeWidth - 50, y, fadeWidth*2 + 100, 11);
+        }
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

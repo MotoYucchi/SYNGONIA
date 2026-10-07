@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      width: 100vw;
+      height: 100vh;
+    }
+    #canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<!-- VJ Schema -->
+<script id="vj-schema" type="application/json">
+    [
+      {
+            "id": "speed",
+            "label": "速度",
+            "type": "range",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "default": 1.5,
+            "midi": "Knob1-1"
+      },
+      {
+            "id": "intensity",
+            "label": "強度",
+            "type": "range",
+            "min": 0,
+            "max": 2,
+            "step": 0.01,
+            "default": 1.0,
+            "midi": "Knob2-1"
+      },
+      {
+            "id": "glitch",
+            "label": "グリッチ",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "default": 0.5,
+            "midi": "Fader1-1"
+      },
+      {
+            "id": "flash",
+            "label": "ストロボ",
+            "type": "range",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "default": 0.3,
+            "midi": "Fader2-1"
+      },
+      {
+            "id": "mode",
+            "label": "モード",
+            "type": "select",
+            "options": [
+                  "radial",
+                  "bars",
+                  "noise"
+            ],
+            "default": "radial",
+            "midi": "Pad1"
+      },
+      {
+            "id": "hueSource",
+            "label": "Hue Band",
+            "type": "select",
+            "options": [
+                  "None",
+                  "Low",
+                  "Mid",
+                  "High"
+            ],
+            "default": "None"
+      },
+      {
+            "id": "hueAmount",
+            "label": "Hue Amount",
+            "type": "range",
+            "min": -360,
+            "max": 360,
+            "step": 1,
+            "default": 90
+      }
+]
+  </script>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+// ===== 状態 =====
+let params = {
+  baseR: 0,
+  baseG: 255,
+  baseB: 255,
+  baseA: 1.0,
+  speed: 1.5,
+  intensity: 1.0,
+  glitch: 0.5,
+  flash: 0.3,
+  mode: "radial", hueSource: "None", hueAmount: 90 };
+
+let groupColor = { r: 0, g: 0, b: 0 };
+let fftData = new Uint8Array(512);
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener("message", (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(draw);
+      }
+      return;
+    }
+  if (msg.type === "param_update") params[msg.paramId] = msg.value;
+  if (msg.type === "group_update") groupColor = hexToRgb(msg.color);
+  if (msg.type === "audio_data") fftData = new Uint8Array(msg.fft);
+});
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) || 0;
+  const g = parseInt(hex.slice(3, 5), 16) || 0;
+  const b = parseInt(hex.slice(5, 7), 16) || 0;
+  return { r, g, b };
+}
+
+// ===== FFT解析 =====
+function getBass() {
+  let sum = 0;
+  for (let i = 0; i < 10; i++) sum += fftData[i];
+  return sum / 10 / 255;
+}
+function getMid() {
+  let sum = 0;
+  for (let i = 20; i < 60; i++) sum += fftData[i];
+  return sum / 40 / 255;
+}
+function getHigh() {
+  let sum = 0;
+  for (let i = 100; i < 255; i++) sum += fftData[i];
+  return sum / 155 / 255;
+}
+
+// ===== メイン描画 =====
+let t = 0;
+
+function draw() {
+      if (!isVisible) { isAnimating = false; return; }
+  t += 0.016 * params.speed;
+
+  const bass = getBass() * params.intensity;
+  const mid = getMid() * params.intensity;
+  const high = getHigh() * params.intensity;
+      // --- Audio Reactive Hue ---
+      let _hueVal = 0;
+      if (params.hueSource === 'Low') _hueVal = bass;
+      else if (params.hueSource === 'Mid') _hueVal = getMid();
+      else if (params.hueSource === 'High') _hueVal = high;
+      const _hueDeg = _hueVal * params.hueAmount;
+      if (_hueDeg !== 0) canvas.style.filter = 'hue-rotate(' + _hueDeg + 'deg)';
+      else canvas.style.filter = '';
+
+  const r = Math.min(255, params.baseR + groupColor.r);
+  const g = Math.min(255, params.baseG + groupColor.g);
+  const b = Math.min(255, params.baseB + groupColor.b);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // ===== MODE切替 =====
+  if (params.mode === "radial") drawRadial(bass, mid, high, r, g, b);
+  if (params.mode === "bars") drawBars(bass, mid, high, r, g, b);
+  if (params.mode === "noise") drawNoise(bass, mid, high, r, g, b);
+
+  // ===== ストロボ =====
+  if (Math.random() < params.flash * bass) {
+    ctx.fillStyle = `rgba(255,255,255,${bass})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  glitchEffect();
+  requestAnimationFrame(draw);
+}
+
+// ===== エフェクト群 =====
+
+function drawRadial(bass, mid, high, r, g, b) {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  const rays = 60;
+  for (let i = 0; i < rays; i++) {
+    const angle = (i / rays) * Math.PI * 2 + t;
+    const len = 200 + bass * 600;
+
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(
+      cx + Math.cos(angle) * len,
+      cy + Math.sin(angle) * len
+    );
+    ctx.strokeStyle = `rgba(${r},${g},${b},${0.3 + mid})`;
+    ctx.lineWidth = 1 + high * 5;
+    ctx.stroke();
+  }
+}
+
+function drawBars(bass, mid, high, r, g, b) {
+  const barWidth = canvas.width / 64;
+
+  for (let i = 0; i < 64; i++) {
+    const val = fftData[i] / 255;
+    const h = val * canvas.height * (0.5 + bass);
+
+    ctx.fillStyle = `rgba(${r},${g},${b},${0.2 + val})`;
+    ctx.fillRect(i * barWidth, canvas.height - h, barWidth - 2, h);
+  }
+}
+
+function drawNoise(bass, mid, high, r, g, b) {
+  const density = Math.floor(300 * (0.5 + high));
+
+  for (let i = 0; i < density; i++) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+
+    ctx.fillStyle = `rgba(${r},${g},${b},${Math.random() * mid})`;
+    ctx.fillRect(x, y, 2 + bass * 6, 2 + bass * 6);
+  }
+}
+
+// ===== グリッチ =====
+function glitchEffect() {
+  if (canvas.width > 20 && canvas.height > 20 && Math.random() < params.glitch) {
+    const maxH = Math.max(1, canvas.height - 50);
+    const y = Math.floor(Math.random() * maxH);
+    const h = Math.floor(Math.random() * 40) + 2;
+    if (y >= 0 && y + h <= canvas.height) {
+      try {
+        const img = ctx.getImageData(0, y, canvas.width, h);
+        ctx.putImageData(img, Math.floor(Math.random() * 20 - 10), y);
+      } catch (err) {}
+    }
+  }
+}
+
+draw();
+</script>
+
+</body>
+</html>

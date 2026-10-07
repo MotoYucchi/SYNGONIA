@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "bassFreqLow", "label": "Bass Freq Low", "type": "range", "min": 0, "max": 50, "step": 1, "default": 0 },
+    { "id": "bassFreqHigh", "label": "Bass Freq High", "type": "range", "min": 1, "max": 80, "step": 1, "default": 10 },
+    { "id": "bassThreshold", "label": "Bass Threshold", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.15 },
+    { "id": "bassSense", "label": "Bass Sensitivity", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "flashDuration", "label": "Flash Duration (ms)", "type": "range", "min": 20, "max": 300, "step": 5, "default": 60 },
+    { "id": "cooldown", "label": "Cooldown (ms)", "type": "range", "min": 30, "max": 500, "step": 10, "default": 80 },
+    { "id": "color", "label": "Flash Color", "type": "color", "default": "#ffffff" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.8 },
+    { "id": "shape", "label": "Shape", "type": "select", "options": ["Full", "Circle", "Cross", "Diamond"], "default": "Full" },
+    { "id": "hueSource", "label": "Hue Band", "type": "select", "options": ["None", "Low", "Mid", "High"], "default": "None" },
+    { "id": "hueAmount", "label": "Hue Amount", "type": "range", "min": -360, "max": 360, "step": 1, "default": 90 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height, cx, cy;
+function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; cx = width/2; cy = height/2; }
+window.addEventListener('resize', resize); resize();
+
+let params = {
+  bassFreqLow: 0, bassFreqHigh: 10, bassThreshold: 0.15, bassSense: 1.5,
+  flashDuration: 60, cooldown: 80,
+  color: '#ffffff', opacity: 0.8, shape: 'Full',
+  hueSource: 'None', hueAmount: 90, shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let flashAlpha = 0, lastHitTime = 0, prevBelow = true, flashIntensity = 0;
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : { r:255,g:255,b:255 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color','shape','hueSource'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+  else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+});
+
+function getBass() {
+  const lo = Math.max(0, params.bassFreqLow), hi = Math.min(511, params.bassFreqHigh);
+  if (hi <= lo) return 0;
+  let s = 0; for (let i = lo; i <= hi; i++) s += currentFFT[i];
+  return (s / (hi - lo + 1)) / 255;
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawBass = getBass();
+  const now = performance.now();
+
+  // ヒット検出
+  const isAbove = rawBass > params.bassThreshold;
+  if (isAbove && prevBelow && (now - lastHitTime) > params.cooldown) {
+    flashAlpha = 1.0;
+    flashIntensity = rawBass;
+    lastHitTime = now;
+  }
+  prevBelow = !isAbove;
+
+  // フラッシュ減衰
+  const decayRate = 1.0 / (params.flashDuration / 16.67);
+  flashAlpha = Math.max(0, flashAlpha - decayRate);
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Hue
+  let hv = 0;
+  if (params.hueSource === 'Low') hv = rawBass;
+  else if (params.hueSource === 'Mid') { let s=0; for(let i=20;i<=30;i++) s+=currentFFT[i]; hv=s/11/255; }
+  else if (params.hueSource === 'High') { let s=0; for(let i=100;i<=120;i++) s+=currentFFT[i]; hv=s/21/255; }
+  canvas.style.filter = hv ? `hue-rotate(${hv*params.hueAmount}deg)` : '';
+
+  if (flashAlpha <= 0) { requestAnimationFrame(render); return; }
+
+  const lRgb = hexToRgb(params.color);
+  const r = Math.min(255, lRgb.r+groupColorRgb.r), g = Math.min(255, lRgb.g+groupColorRgb.g), b = Math.min(255, lRgb.b+groupColorRgb.b);
+  const alpha = flashAlpha * params.opacity * flashIntensity * params.bassSense;
+
+  ctx.save();
+  ctx.translate((params.shiftX||0)/100*cx, (params.shiftY||0)/100*cy);
+
+  switch (params.shape) {
+    case 'Full':
+      ctx.fillStyle = `rgba(${r},${g},${b},${Math.min(1, alpha)})`;
+      ctx.fillRect(0, 0, width, height);
+      break;
+
+    case 'Circle':
+      const rad = Math.max(width, height) * 0.4 * (0.5 + flashIntensity);
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${Math.min(1, alpha)})`);
+      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+      break;
+
+    case 'Cross':
+      ctx.fillStyle = `rgba(${r},${g},${b},${Math.min(1, alpha)})`;
+      const cw = 40 + flashIntensity * 80;
+      ctx.fillRect(cx - cw/2, 0, cw, height);
+      ctx.fillRect(0, cy - cw/2, width, cw);
+      break;
+
+    case 'Diamond':
+      ctx.fillStyle = `rgba(${r},${g},${b},${Math.min(1, alpha)})`;
+      const ds = Math.max(width, height) * 0.5 * flashIntensity;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - ds);
+      ctx.lineTo(cx + ds, cy);
+      ctx.lineTo(cx, cy + ds);
+      ctx.lineTo(cx - ds, cy);
+      ctx.closePath();
+      ctx.fill();
+      break;
+  }
+
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

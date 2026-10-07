@@ -1,0 +1,127 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <style>body { margin: 0; overflow: hidden; background: transparent; }
+  canvas { display: block; width: 100vw; height: 100vh; }</style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "opacity", "label": "Master Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.5 },
+      { "id": "color", "label": "Base Color", "type": "color", "default": "#aa44cc" },
+      { "id": "speed", "label": "Rotation Speed", "type": "range", "min": 0, "max": 2, "step": 0.01, "default": 0.3 },
+      { "id": "ringCount", "label": "Ring Count", "type": "range", "min": 1, "max": 10, "step": 1, "default": 5 },
+      { "id": "ringSpacing", "label": "Ring Spacing", "type": "range", "min": 20, "max": 200, "step": 1, "default": 60 },
+      { "id": "thickness", "label": "Line Thickness", "type": "range", "min": 0.5, "max": 10, "step": 0.5, "default": 2 },
+      { "id": "reactLow", "label": "Low React (Expand)", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.5 },
+      { "id": "reactMid", "label": "Mid React (Rotate)", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.0 },
+      { "id": "reactHigh", "label": "High React (Blur)", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.0 }
+    ,
+      { "id": "hueSource", "label": "Hue Band", "type": "select", "options": ["None", "Low", "Mid", "High"], "default": "None" },
+      { "id": "hueAmount", "label": "Hue Amount", "type": "range", "min": -360, "max": 360, "step": 1, "default": 90 }
+    ]
+  </script>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height, cx, cy;
+    function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; cx = width/2; cy = height/2; }
+    window.addEventListener('resize', resize); resize();
+
+    let params = { opacity: 0.5, color: '#aa44cc', speed: 0.3, ringCount: 5, ringSpacing: 60, thickness: 2, reactLow: 1.5, reactMid: 1.0, reactHigh: 1.0 , hueSource: "None", hueAmount: 90 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let time = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 170, g: 68, b: 204 };
+    }
+
+    // Universal baseA handler - apply layer alpha as body opacity
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        params[msg.paramId] = ['color', 'hueSource'].includes(msg.paramId) ? msg.value : Number(msg.value);
+      } else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3]) / 3 / 255.0 || 0;
+      let midSum = 0; for(let i = 20; i <= 30; i++) midSum += currentFFT[i];
+      const mid = (midSum / 11) / 255.0 || 0;
+      let highSum = 0; for(let i = 100; i <= 120; i++) highSum += currentFFT[i];
+
+      // --- Audio Reactive Hue ---
+      let _hueVal = 0;
+      if (params.hueSource === 'Low') _hueVal = low;
+      else if (params.hueSource === 'Mid') _hueVal = mid;
+      else if (params.hueSource === 'High') _hueVal = high;
+      const _hueDeg = _hueVal * params.hueAmount;
+      if (_hueDeg !== 0) canvas.style.filter = `hue-rotate(${_hueDeg}deg)`;
+      else canvas.style.filter = '';
+      const high = (highSum / 21) / 255.0 || 0;
+
+      time += params.speed * 0.005 * (1 + mid * params.reactMid);
+      ctx.clearRect(0, 0, width, height);
+
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Blur glow from high-frequency
+      const blurAmount = Math.min(20, high * params.reactHigh * 15);
+      if (blurAmount > 0.5) ctx.filter = `blur(${blurAmount}px)`;
+
+      for (let i = 0; i < params.ringCount; i++) {
+        const radius = (i + 1) * params.ringSpacing * (1 + bass * params.reactLow * 0.3);
+        const ringTime = time * (1 + i * 0.15);
+        const alpha = params.opacity * (0.8 - i * 0.06);
+        const breathe = 1 + Math.sin(time * 1.5 + i * 0.8) * 0.15;
+
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        ctx.lineWidth = params.thickness * breathe;
+        ctx.beginPath();
+
+        // Undulating ring
+        const points = 120;
+        for (let j = 0; j <= points; j++) {
+          const angle = (j / points) * Math.PI * 2;
+          const wobble = Math.sin(angle * 3 + ringTime * 2 + i) * radius * 0.08
+                       + Math.sin(angle * 5 + ringTime * 1.3) * radius * 0.04;
+          const r2 = radius * breathe + wobble;
+          const px = Math.cos(angle + ringTime) * r2;
+          const py = Math.sin(angle + ringTime) * r2;
+          j === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

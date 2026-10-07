@@ -1,0 +1,245 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {"id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0},
+      {"id": "scale", "label": "Scale", "type": "range", "min": 0.1, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "speed", "label": "Speed", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.0},
+      {"id": "depth", "label": "Copy Depth (1-5)", "type": "range", "min": 1, "max": 5, "step": 1, "default": 5},
+      {"id": "mirrorMode", "label": "Mirror Mode", "type": "select", "options": ["None", "Horizontal", "Vertical", "Quad"], "default": "Quad"},
+      {"id": "beatPunch", "label": "Beat Punch", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.5},
+      {"id": "rgbShift", "label": "RGB Shift", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.4},
+      {"id": "rotation", "label": "Rotation", "type": "range", "min": 0, "max": 360, "step": 1, "default": 0},
+      {"id": "color", "label": "Color", "type": "color", "default": "#ffffff"},
+      {"id": "audioGain", "label": "Audio Gain", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0},
+      {"id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0}
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width = 1920, height = 1080, cx = 960, cy = 540;
+
+    function resize() {
+      width = canvas.width = Math.max(1, window.innerWidth || 1920);
+      height = canvas.height = Math.max(1, window.innerHeight || 1080);
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = {
+      opacity: 1.0,
+      scale: 1.0,
+      speed: 1.0,
+      depth: 5,
+      mirrorMode: "Quad",
+      beatPunch: 1.5,
+      rgbShift: 0.4,
+      rotation: 0,
+      color: "#ffffff",
+      audioGain: 1.0,
+      shiftX: 0,
+      shiftY: 0
+    };
+
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let isVisible = true;
+    let isAnimating = true;
+    let time = 0;
+    let smoothPunch = 0;
+    let rotDirection = 1;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    function calculateModColor(layerHex, gRgb, alpha = params.opacity) {
+      const lRgb = hexToRgb(layerHex || "#ffffff");
+      const r = (lRgb.r + (gRgb ? gRgb.r : 0)) % 256;
+      const g = (lRgb.g + (gRgb ? gRgb.g : 0)) % 256;
+      const b = (lRgb.b + (gRgb ? gRgb.b : 0)) % 256;
+      const safeAlpha = Math.max(0, Math.min(1, isNaN(alpha) ? 1.0 : Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === 'visibility') {
+        isVisible = !!msg.visible;
+        if (isVisible && !isAnimating) {
+          isAnimating = true;
+          requestAnimationFrame(render);
+        }
+        return;
+      }
+      if (msg.type === 'param_update') {
+        if (['color', 'mirrorMode'].includes(msg.paramId)) {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    // Copy Pass レンダラー：1つの基本トンネルフレームを生成
+    function drawBaseTunnelFrame(w, h, bass, mid, high, step) {
+      const rad = Math.min(w, h) * 0.42;
+      ctx.beginPath();
+      // 八角形トンネルゲート
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const px = Math.cos(a) * rad;
+        const py = Math.sin(a) * rad;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      // コーナーガイドライン
+      const half = rad * 0.7;
+      ctx.strokeRect(-half, -half, half * 2, half * 2);
+
+      // エネルギーコアライン
+      if (step % 2 === 0) {
+        ctx.beginPath();
+        ctx.arc(0, 0, rad * 0.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function render() {
+      if (!isVisible) {
+        isAnimating = false;
+        return;
+      }
+
+      if (width <= 1 || height <= 1) {
+        resize();
+        if (width <= 1 || height <= 1) {
+          requestAnimationFrame(render);
+          return;
+        }
+      }
+
+      // Audio analysis
+      const bass = ((currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0) * (params.audioGain || 1.0);
+      let midSum = 0; for (let i = 15; i <= 40; i++) midSum += currentFFT[i];
+      const mid = ((midSum / 26) / 255.0 || 0) * (params.audioGain || 1.0);
+      let highSum = 0; for (let i = 80; i <= 140; i++) highSum += currentFFT[i];
+      const high = ((highSum / 61) / 255.0 || 0) * (params.audioGain || 1.0);
+
+      // Beat Punch & 回転反転検出
+      if (bass > 0.65 && smoothPunch < 0.2) {
+        rotDirection *= -1; // ビート時に回転反転
+      }
+      smoothPunch = smoothPunch * 0.85 + (bass * (params.beatPunch || 1.5)) * 0.15;
+
+      const spd = (params.speed !== undefined ? params.speed : 1.0);
+      time += spd * 0.02 * rotDirection;
+
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // Base translation and rotation
+      const shiftOffsetX = (params.shiftX || 0) / 100 * cx;
+      const shiftOffsetY = (params.shiftY || 0) / 100 * cy;
+      ctx.translate(cx + shiftOffsetX, cy + shiftOffsetY);
+
+      if (params.rotation) {
+        ctx.rotate((params.rotation * Math.PI) / 180);
+      }
+
+      const globalScale = (params.scale || 1.0) * (1.0 + smoothPunch * 0.35);
+      ctx.scale(globalScale, globalScale);
+
+      const maxCopies = Math.max(1, Math.min(5, Math.floor(params.depth || 5)));
+      const baseAlpha = params.opacity || 1.0;
+
+      // ── Copy 1〜5 パス実行 ──
+      for (let copyIdx = 1; copyIdx <= maxCopies; copyIdx++) {
+        ctx.save();
+
+        // 指数関数的スケール縮小（無限トンネルの奥行き）
+        const decayScale = Math.pow(0.72, copyIdx - 1) * (1.0 + Math.sin(time * 2 + copyIdx) * 0.05);
+        ctx.scale(decayScale, decayScale);
+
+        // 各Copyで交互に回転
+        const copyRot = (time * (0.4 + copyIdx * 0.15)) * ((copyIdx % 2 === 0) ? 1 : -1);
+        ctx.rotate(copyRot);
+
+        // Mirror 処理
+        const mirror = params.mirrorMode || "Quad";
+        const passes = (mirror === "Quad") ? 4 : (mirror === "Horizontal" || mirror === "Vertical" ? 2 : 1);
+
+        for (let m = 0; m < passes; m++) {
+          ctx.save();
+          if (mirror === "Horizontal" && m === 1) ctx.scale(-1, 1);
+          if (mirror === "Vertical" && m === 1) ctx.scale(1, -1);
+          if (mirror === "Quad") {
+            if (m === 1) ctx.scale(-1, 1);
+            if (m === 2) ctx.scale(1, -1);
+            if (m === 3) ctx.scale(-1, -1);
+          }
+
+          // RGB Shift 分離描画
+          const shiftVal = (params.rgbShift || 0.4) * (8 + high * 18);
+          const copyAlpha = baseAlpha * (1.0 - (copyIdx - 1) * 0.16);
+
+          ctx.lineWidth = 2 + high * 4;
+
+          // Red Shift
+          if (shiftVal > 0.5) {
+            ctx.save();
+            ctx.translate(-shiftVal, 0);
+            ctx.strokeStyle = `rgba(255, 30, 80, ${copyAlpha * 0.7})`;
+            drawBaseTunnelFrame(width, height, bass, mid, high, copyIdx);
+            ctx.restore();
+
+            // Cyan/Blue Shift
+            ctx.save();
+            ctx.translate(shiftVal, 0);
+            ctx.strokeStyle = `rgba(0, 230, 255, ${copyAlpha * 0.7})`;
+            drawBaseTunnelFrame(width, height, bass, mid, high, copyIdx);
+            ctx.restore();
+          }
+
+          // Main Modulo Color Frame
+          ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, copyAlpha);
+          drawBaseTunnelFrame(width, height, bass, mid, high, copyIdx);
+
+          ctx.restore();
+        }
+
+        ctx.restore();
+      }
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

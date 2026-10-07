@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "barCount", "label": "バー数", "type": "range", "min": 16, "max": 128, "step": 1, "default": 64 },
+    { "id": "barWidth", "label": "バー幅", "type": "range", "min": 0.5, "max": 1.0, "step": 0.05, "default": 0.85 },
+    { "id": "glitchIntensity", "label": "グリッチ強度", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.4 },
+    { "id": "shakeAmount", "label": "シェイク量", "type": "range", "min": 0, "max": 30, "step": 1, "default": 10 },
+    { "id": "channelSplit", "label": "RGB分離", "type": "range", "min": 0, "max": 20, "step": 0.5, "default": 5 },
+    { "id": "mirror", "label": "ミラー", "type": "select", "options": ["Off", "Center", "Dual"], "default": "Center" },
+    { "id": "sizeReact", "label": "サイズ反応", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.5 },
+    { "id": "colorReactLow", "label": "Low→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 120 },
+    { "id": "colorReactMid", "label": "Mid→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 60 },
+    { "id": "colorReactHigh", "label": "High→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 30 },
+    { "id": "smoothing", "label": "スムージング", "type": "range", "min": 0.05, "max": 0.5, "step": 0.01, "default": 0.15 },
+    { "id": "color", "label": "ベース色", "type": "color", "default": "#ffaa00" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let params = {
+  barCount: 64, barWidth: 0.85, glitchIntensity: 0.4, shakeAmount: 10,
+  channelSplit: 5, mirror: 'Center', sizeReact: 1.5,
+  colorReactLow: 120, colorReactMid: 60, colorReactHigh: 30,
+  smoothing: 0.15, color: '#ffaa00', opacity: 1.0,
+  shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let time = 0;
+let smoothLow = 0, smoothMid = 0, smoothHigh = 0;
+let prevLow = 0, prevMid = 0, prevHigh = 0;
+let smoothBars = new Array(128).fill(0);
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 170, b: 0 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color', 'mirror'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) {
+    currentFFT = msg.fft;
+  } else if (msg.type === 'group_update') {
+    groupColorRgb = hexToRgb(msg.color);
+  }
+});
+
+function getLow() { let s = 0; for (let i = 0; i <= 10; i++) s += currentFFT[i]; return (s / 11) / 255; }
+function getMid() { let s = 0; for (let i = 20; i <= 60; i++) s += currentFFT[i]; return (s / 41) / 255; }
+function getHigh() { let s = 0; for (let i = 100; i <= 200; i++) s += currentFFT[i]; return (s / 101) / 255; }
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawLow = getLow();
+  const rawMid = getMid();
+  const rawHigh = getHigh();
+
+  const sm = params.smoothing;
+  smoothLow += (rawLow - smoothLow) * sm;
+  smoothMid += (rawMid - smoothMid) * sm;
+  smoothHigh += (rawHigh - smoothHigh) * sm;
+
+  const deltaLow = Math.abs(rawLow - prevLow);
+  const deltaMid = Math.abs(rawMid - prevMid);
+  const deltaHigh = Math.abs(rawHigh - prevHigh);
+  prevLow = rawLow; prevMid = rawMid; prevHigh = rawHigh;
+
+  time += 0.016;
+  ctx.clearRect(0, 0, width, height);
+
+  const lRgb = hexToRgb(params.color);
+  const baseR = Math.min(255, lRgb.r + groupColorRgb.r);
+  const baseG = Math.min(255, lRgb.g + groupColorRgb.g);
+  const baseB = Math.min(255, lRgb.b + groupColorRgb.b);
+  const baseHue = (Math.atan2(baseB - 128, baseR - 128) * 180 / Math.PI + 360) % 360;
+
+  const shiftXPx = (params.shiftX / 100) * (width / 2);
+  const shiftYPx = (params.shiftY / 100) * (height / 2);
+
+  // シェイク（Low反応）
+  const shakeX = (Math.random() - 0.5) * params.shakeAmount * smoothLow * 2;
+  const shakeY = (Math.random() - 0.5) * params.shakeAmount * smoothLow * 2;
+
+  ctx.save();
+  ctx.translate(shiftXPx + shakeX, shiftYPx + shakeY);
+
+  const barCount = Math.floor(params.barCount);
+  const bw = (width / barCount) * params.barWidth;
+  const gap = width / barCount;
+  const split = params.channelSplit * smoothHigh;
+
+  for (let i = 0; i < barCount; i++) {
+    // FFTマッピング（対数スケール風）
+    const fftIndex = Math.min(511, Math.floor(Math.pow(i / barCount, 1.5) * 256));
+    const rawVal = currentFFT[fftIndex] / 255;
+
+    // バーごとのスムージング
+    smoothBars[i] += (rawVal - smoothBars[i]) * 0.3;
+    const val = smoothBars[i];
+
+    // 帯域判定
+    let bandLow = fftIndex <= 10;
+    let bandMid = fftIndex > 10 && fftIndex <= 60;
+    let bandHigh = fftIndex > 60;
+
+    // 高さ
+    const barH = val * height * 0.7 * (1 + (bandLow ? deltaLow : bandMid ? deltaMid : deltaHigh) * params.sizeReact);
+
+    // 色相
+    const hue = baseHue
+      + (bandLow ? smoothLow * params.colorReactLow : 0)
+      + (bandMid ? deltaMid * params.colorReactMid * 3 : 0)
+      + (bandHigh ? deltaHigh * params.colorReactHigh * 5 : 0)
+      + (i / barCount) * 60;
+    const sat = 0.8 + val * 0.2;
+    const lit = 0.3 + val * 0.4;
+    const rgb = hslToRgb(hue, sat, lit);
+    const alpha = params.opacity * (0.4 + val * 0.6);
+
+    // グリッチ：バーの位置をずらす
+    let glitchOffset = 0;
+    if (Math.random() < params.glitchIntensity * smoothMid) {
+      glitchOffset = (Math.random() - 0.5) * 30 * params.glitchIntensity;
+    }
+
+    const x = i * gap + glitchOffset;
+
+    if (params.mirror === 'Center') {
+      // 中心から上下に伸びる
+      const cy = height / 2;
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(x, cy - barH / 2, bw, barH);
+
+      // RGB分離
+      if (split > 0.5) {
+        ctx.fillStyle = `rgba(${rgb.r},0,0,${alpha * 0.3})`;
+        ctx.fillRect(x - split, cy - barH / 2, bw, barH);
+        ctx.fillStyle = `rgba(0,0,${rgb.b},${alpha * 0.3})`;
+        ctx.fillRect(x + split, cy - barH / 2, bw, barH);
+      }
+    } else if (params.mirror === 'Dual') {
+      // 上下対称
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(x, height - barH, bw, barH);
+      ctx.fillRect(x, 0, bw, barH);
+    } else {
+      // 下から上
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(x, height - barH, bw, barH);
+    }
+  }
+
+  // スキャンライン（グリッチ感）
+  if (params.glitchIntensity > 0 && smoothMid > 0.1) {
+    const scanCount = Math.floor(5 + params.glitchIntensity * 10 * smoothMid);
+    for (let i = 0; i < scanCount; i++) {
+      const y = Math.random() * height;
+      const h = 1 + Math.random() * 3;
+      ctx.fillStyle = `rgba(255,255,255,${0.02 + params.glitchIntensity * 0.05})`;
+      ctx.fillRect(0, y, width, h);
+    }
+  }
+
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "lineCount", "label": "ライン数", "type": "range", "min": 1, "max": 100, "step": 1, "default": 20 },
+      { "id": "baseWidth", "label": "基本幅", "type": "range", "min": 1, "max": 200, "step": 1, "default": 50 },
+      { "id": "color", "label": "色", "type": "color", "default": "#ffffff" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.8 },
+      { "id": "reactLow", "label": "低音 -> フラッシュ出現", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 2.0 },
+      { "id": "reactMid", "label": "中音 -> 太さ変化", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.0 },
+      { "id": "speed", "label": "横移動速度", "type": "range", "min": 0, "max": 10, "step": 0.1, "default": 0.5 }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { lineCount: 20, baseWidth: 50, color: "#ffffff", opacity: 0.8, reactLow: 2.0, reactMid: 1.0, speed: 0.5 };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    
+    let lines = [];
+    function initLines() {
+      lines = [];
+      for(let i=0; i<params.lineCount; i++) {
+        lines.push({
+          x: Math.random() * width,
+          baseW: Math.random() * params.baseWidth + 5,
+          life: Math.random(),
+          vx: (Math.random() - 0.5) * params.speed * 10
+        });
+      }
+    }
+    initLines();
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+    function calculateModColor(layerHex, gRgb) {
+      const lRgb = hexToRgb(layerHex);
+      const r = Math.min(255, lRgb.r + gRgb.r);
+      const g = Math.min(255, lRgb.g + gRgb.g);
+      const b = Math.min(255, lRgb.b + gRgb.b);
+      return `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+        
+        if (msg.paramId === 'lineCount') initLines();
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3]) / 3 / 255.0 || 0;
+      let midSum = 0; for(let i=20; i<=30; i++) midSum += currentFFT[i];
+      const mid = (midSum / 11) / 255.0 || 0;
+      
+      ctx.clearRect(0, 0, width, height);
+
+      const drawColor = calculateModColor(params.color, groupColorRgb);
+      ctx.fillStyle = drawColor;
+
+      lines.forEach(line => {
+        // 音でランダムに位置リセット
+        if (params.reactLow > 0 && bass > 0.6 * (1 / params.reactLow) && Math.random() < 0.1) {
+          line.x = Math.random() * width;
+          line.life = 1.0;
+          line.baseW = Math.random() * params.baseWidth + 5;
+        }
+
+        line.x += line.vx * params.speed;
+        if(line.x < 0) line.x = width; if(line.x > width) line.x = 0;
+
+        if (params.reactLow === 0) {
+          line.life = 1.0; // 常に表示
+        } else {
+          line.life *= 0.95; // フェードアウト
+        }
+
+        const thickness = line.baseW * (1 + mid * params.reactMid * 5);
+        
+        // ライフがある程度あれば描画
+        if (line.life > 0.05) {
+          ctx.globalAlpha = line.life * params.opacity;
+          ctx.fillRect(line.x - thickness/2, 0, thickness, height);
+        }
+      });
+      ctx.globalAlpha = 1.0;
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

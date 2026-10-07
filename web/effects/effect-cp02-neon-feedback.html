@@ -1,0 +1,207 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {"id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0},
+      {"id": "scale", "label": "Scale", "type": "range", "min": 0.1, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "speed", "label": "Speed", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.0},
+      {"id": "feedback", "label": "Feedback Amt", "type": "range", "min": 0.5, "max": 0.98, "step": 0.01, "default": 0.88},
+      {"id": "decay", "label": "Decay Rate", "type": "range", "min": 0.01, "max": 0.3, "step": 0.01, "default": 0.08},
+      {"id": "zoom", "label": "Zoom Rate", "type": "range", "min": -0.05, "max": 0.1, "step": 0.005, "default": 0.02},
+      {"id": "rotSpeed", "label": "Rot Drift", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.2},
+      {"id": "driftX", "label": "Drift X", "type": "range", "min": -20, "max": 20, "step": 1, "default": 2},
+      {"id": "driftY", "label": "Drift Y", "type": "range", "min": -20, "max": 20, "step": 1, "default": -3},
+      {"id": "rgbShift", "label": "RGB Shift", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.35},
+      {"id": "beatBoost", "label": "Beat Boost", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.8},
+      {"id": "color", "label": "Color", "type": "color", "default": "#00ffff"},
+      {"id": "audioGain", "label": "Audio Gain", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0}
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width = 1920, height = 1080, cx = 960, cy = 540;
+
+    // Feedback 用オフスクリーンバッファ (Copy 2〜5 用)
+    const fbCanvas = document.createElement('canvas');
+    const fbCtx = fbCanvas.getContext('2d', { alpha: true });
+
+    function resize() {
+      width = canvas.width = fbCanvas.width = Math.max(1, window.innerWidth || 1920);
+      height = canvas.height = fbCanvas.height = Math.max(1, window.innerHeight || 1080);
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = {
+      opacity: 1.0,
+      scale: 1.0,
+      speed: 1.0,
+      feedback: 0.88,
+      decay: 0.08,
+      zoom: 0.02,
+      rotSpeed: 1.2,
+      driftX: 2,
+      driftY: -3,
+      rgbShift: 0.35,
+      beatBoost: 1.8,
+      color: "#00ffff",
+      audioGain: 1.0
+    };
+
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let isVisible = true;
+    let isAnimating = true;
+    let time = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 255, b: 255 };
+    }
+
+    function calculateModColor(layerHex, gRgb, alpha = params.opacity) {
+      const lRgb = hexToRgb(layerHex || "#00ffff");
+      const r = (lRgb.r + (gRgb ? gRgb.r : 0)) % 256;
+      const g = (lRgb.g + (gRgb ? gRgb.g : 0)) % 256;
+      const b = (lRgb.b + (gRgb ? gRgb.b : 0)) % 256;
+      const safeAlpha = Math.max(0, Math.min(1, isNaN(alpha) ? 1.0 : Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === 'visibility') {
+        isVisible = !!msg.visible;
+        if (isVisible && !isAnimating) {
+          isAnimating = true;
+          requestAnimationFrame(render);
+        }
+        return;
+      }
+      if (msg.type === 'param_update') {
+        if (['color'].includes(msg.paramId)) {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    function render() {
+      if (!isVisible) {
+        isAnimating = false;
+        return;
+      }
+
+      if (width <= 1 || height <= 1) {
+        resize();
+        if (width <= 1 || height <= 1) {
+          requestAnimationFrame(render);
+          return;
+        }
+      }
+
+      // Audio analysis
+      const bass = ((currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0) * (params.audioGain || 1.0);
+      let midSum = 0; for (let i = 15; i <= 40; i++) midSum += currentFFT[i];
+      const mid = ((midSum / 26) / 255.0 || 0) * (params.audioGain || 1.0);
+      let highSum = 0; for (let i = 80; i <= 140; i++) highSum += currentFFT[i];
+      const high = ((highSum / 61) / 255.0 || 0) * (params.audioGain || 1.0);
+
+      time += (params.speed !== undefined ? params.speed : 1.0) * 0.02;
+
+      // ── Copy 1 (Reactor Core Generator) ──
+      // メインキャンバスに現在のコア幾何学リアクターを描画
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // 前フレームのフィードバックバッファを適用（Copy 2〜5 の合成結果）
+      ctx.globalAlpha = Math.max(0, Math.min(0.99, params.feedback || 0.88));
+      ctx.drawImage(fbCanvas, 0, 0);
+      ctx.globalAlpha = 1.0;
+
+      // コアリアクターの描画
+      ctx.translate(cx, cy);
+      const coreScale = (params.scale || 1.0) * (1.0 + bass * 0.4 * (params.beatBoost || 1.8));
+      ctx.scale(coreScale, coreScale);
+      ctx.rotate(time * 0.5);
+
+      const rad = 130 + mid * 70;
+      ctx.lineWidth = 3 + high * 6;
+      ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, params.opacity);
+
+      // リアクターリング
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const px = Math.cos(a) * rad;
+        const py = Math.sin(a) * rad;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      // 内核パルス
+      ctx.beginPath();
+      ctx.arc(0, 0, rad * 0.4 * (1.0 + bass * 0.6), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // ── Copy 2〜5: フィードバックバッファの更新 ──
+      fbCtx.save();
+      // 微小減衰（Decay）
+      fbCtx.globalCompositeOperation = "destination-out";
+      fbCtx.fillStyle = `rgba(0, 0, 0, ${params.decay || 0.08})`;
+      fbCtx.fillRect(0, 0, width, height);
+
+      // 加算合成（Lighter）による自己増殖
+      fbCtx.globalCompositeOperation = "lighter";
+
+      // Copy 2 (Zoom) & Copy 3 (Rotation & Drift)
+      const zoomRate = 1.0 + (params.zoom || 0.02) + (bass * 0.04);
+      const rotAngle = ((params.rotSpeed || 1.2) * Math.PI) / 180 * 0.05;
+      const dx = params.driftX || 2;
+      const dy = params.driftY || -3;
+
+      fbCtx.translate(cx + dx, cy + dy);
+      fbCtx.scale(zoomRate, zoomRate);
+      fbCtx.rotate(rotAngle);
+
+      // Copy 4: RGB Shift 分離
+      const shift = (params.rgbShift || 0.35) * (4 + high * 12);
+      if (shift > 0.5) {
+        fbCtx.drawImage(canvas, -cx - shift, -cy);
+        fbCtx.drawImage(canvas, -cx + shift, -cy);
+      }
+      // Copy 5: メインテクスチャ転送
+      fbCtx.drawImage(canvas, -cx, -cy);
+
+      fbCtx.restore();
+
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

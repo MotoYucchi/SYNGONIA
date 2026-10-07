@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "lineCount", "label": "ライン数", "type": "range", "min": 2, "max": 30, "step": 1, "default": 8 },
+    { "id": "scanSpeed", "label": "スキャン速度", "type": "range", "min": 0.1, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "thickness", "label": "ラインの太さ", "type": "range", "min": 1, "max": 40, "step": 0.5, "default": 4 },
+    { "id": "orientation", "label": "向き", "type": "select", "options": ["Horizontal", "Vertical", "Both", "Cross"], "default": "Both" },
+    { "id": "sizeReact", "label": "サイズ反応", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.5 },
+    { "id": "colorReactLow", "label": "Low→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 120 },
+    { "id": "colorReactMid", "label": "Mid→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 60 },
+    { "id": "colorReactHigh", "label": "High→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 30 },
+    { "id": "smoothing", "label": "スムージング", "type": "range", "min": 0.05, "max": 0.5, "step": 0.01, "default": 0.15 },
+    { "id": "glow", "label": "グロー強度", "type": "range", "min": 0, "max": 50, "step": 1, "default": 15 },
+    { "id": "color", "label": "ベース色", "type": "color", "default": "#ff0044" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let params = {
+  lineCount: 8, scanSpeed: 1.5, thickness: 4, orientation: 'Both',
+  sizeReact: 1.5,
+  colorReactLow: 120, colorReactMid: 60, colorReactHigh: 30,
+  smoothing: 0.15, glow: 15, color: '#ff0044', opacity: 1.0,
+  shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let time = 0;
+let smoothLow = 0, smoothMid = 0, smoothHigh = 0;
+let prevLow = 0, prevMid = 0, prevHigh = 0;
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 0, b: 68 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color', 'orientation'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) {
+    currentFFT = msg.fft;
+  } else if (msg.type === 'group_update') {
+    groupColorRgb = hexToRgb(msg.color);
+  }
+});
+
+function getLow() { let s = 0; for (let i = 0; i <= 10; i++) s += currentFFT[i]; return (s / 11) / 255; }
+function getMid() { let s = 0; for (let i = 20; i <= 60; i++) s += currentFFT[i]; return (s / 41) / 255; }
+function getHigh() { let s = 0; for (let i = 100; i <= 200; i++) s += currentFFT[i]; return (s / 101) / 255; }
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawLow = getLow();
+  const rawMid = getMid();
+  const rawHigh = getHigh();
+
+  const sm = params.smoothing;
+  smoothLow += (rawLow - smoothLow) * sm;
+  smoothMid += (rawMid - smoothMid) * sm;
+  smoothHigh += (rawHigh - smoothHigh) * sm;
+
+  const deltaLow = Math.abs(rawLow - prevLow);
+  const deltaMid = Math.abs(rawMid - prevMid);
+  const deltaHigh = Math.abs(rawHigh - prevHigh);
+  prevLow = rawLow; prevMid = rawMid; prevHigh = rawHigh;
+
+  time += 0.016 * params.scanSpeed * (1 + smoothMid * 2);
+  ctx.clearRect(0, 0, width, height);
+
+  const lRgb = hexToRgb(params.color);
+  const baseR = Math.min(255, lRgb.r + groupColorRgb.r);
+  const baseG = Math.min(255, lRgb.g + groupColorRgb.g);
+  const baseB = Math.min(255, lRgb.b + groupColorRgb.b);
+  const baseHue = (Math.atan2(baseB - 128, baseR - 128) * 180 / Math.PI + 360) % 360;
+
+  const shiftXPx = (params.shiftX / 100) * (width / 2);
+  const shiftYPx = (params.shiftY / 100) * (height / 2);
+
+  ctx.save();
+  ctx.translate(shiftXPx, shiftYPx);
+
+  const thick = params.thickness * (1 + smoothLow * params.sizeReact * 2);
+  const glowAmt = params.glow * (1 + smoothLow);
+
+  const ori = params.orientation;
+  const doH = ori === 'Horizontal' || ori === 'Both' || ori === 'Cross';
+  const doV = ori === 'Vertical' || ori === 'Both' || ori === 'Cross';
+  const doDiag = ori === 'Cross';
+
+  // 水平ライン
+  if (doH) {
+    for (let i = 0; i < params.lineCount; i++) {
+      const phase = time * (0.8 + i * 0.15) + i * 1.7;
+      const y = ((Math.sin(phase) + 1) / 2) * height;
+
+      const hue = baseHue + smoothLow * params.colorReactLow
+        + deltaMid * params.colorReactMid * 3 + i * 25;
+      const lit = 0.4 + smoothHigh * 0.4 + deltaLow * 0.3;
+      const rgb = hslToRgb(hue, 0.9, lit);
+      const alpha = params.opacity * (0.5 + smoothLow * 0.5);
+
+      ctx.shadowColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.shadowBlur = glowAmt;
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(0, y - thick / 2, width, thick);
+    }
+  }
+
+  // 垂直ライン
+  if (doV) {
+    for (let i = 0; i < params.lineCount; i++) {
+      const phase = time * (0.6 + i * 0.12) + i * 2.3 + 1.0;
+      const x = ((Math.sin(phase) + 1) / 2) * width;
+
+      const hue = baseHue + smoothMid * params.colorReactMid * 2
+        + deltaHigh * params.colorReactHigh * 5 + i * 30;
+      const lit = 0.35 + smoothMid * 0.4 + deltaHigh * 0.3;
+      const rgb = hslToRgb(hue, 0.85, lit);
+      const alpha = params.opacity * (0.4 + smoothMid * 0.5);
+
+      ctx.shadowColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.shadowBlur = glowAmt;
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(x - thick / 2, 0, thick, height);
+    }
+  }
+
+  // 斜めライン（Highに反応）
+  if (doDiag && smoothHigh > 0.15) {
+    const diagCount = Math.floor(3 + deltaHigh * 10);
+    ctx.save();
+    ctx.translate(width / 2, height / 2);
+    for (let i = 0; i < diagCount; i++) {
+      const angle = (i / diagCount) * Math.PI + time * 0.5;
+      const hue = baseHue + deltaHigh * params.colorReactHigh * 5 + i * 40;
+      const rgb = hslToRgb(hue, 1.0, 0.5 + deltaHigh * 0.4);
+      const alpha = params.opacity * smoothHigh;
+      const diagLen = Math.max(width, height);
+
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.shadowColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.shadowBlur = glowAmt * 0.5;
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.fillRect(-diagLen, -thick * 0.4, diagLen * 2, thick * 0.8);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

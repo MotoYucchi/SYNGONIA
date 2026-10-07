@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      { "id": "thickness", "label": "波形の太さ", "type": "range", "min": 1, "max": 50, "step": 1, "default": 10 },
+      { "id": "amplitude", "label": "振幅", "type": "range", "min": 10, "max": 1000, "step": 10, "default": 300 },
+      { "id": "color", "label": "ベース色", "type": "color", "default": "#ffffff" },
+      { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.8 },
+      { "id": "reactLow", "label": "低音反応", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 2.0 },
+      { "id": "trail", "label": "残像", "type": "range", "min": 0.0, "max": 0.99, "step": 0.01, "default": 0.5 },
+      { "id": "shape", "label": "形状", "type": "select", "options": ["Linear", "Circle"], "default": "Linear" }
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width, height;
+    
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = { thickness: 10, amplitude: 300, color: "#ffffff", opacity: 0.8, reactLow: 2.0, trail: 0.5, shape: "Linear" };
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    
+    let activeBass = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 255, b: 255 };
+    }
+
+    
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+      if (msg.type === 'param_update') {
+        if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+        if (['color', 'shape'].includes(msg.paramId)) params[msg.paramId] = msg.value;
+        else params[msg.paramId] = Number(msg.value);
+      } 
+      else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+      else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+    });
+
+    function render() {
+      if (!isVisible) { isAnimating = false; return; }
+      const bass = (currentFFT[1] + currentFFT[2] + currentFFT[3]) / 3 / 255.0 || 0;
+      activeBass = activeBass * 0.8 + bass * 0.2; // Smooth
+
+      // Trail
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = `rgba(0, 0, 0, ${1.0 - params.trail})`;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.globalCompositeOperation = "source-over";
+
+      const lRgb = hexToRgb(params.color);
+      const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${params.opacity})`;
+      ctx.lineWidth = params.thickness * (1 + activeBass * params.reactLow);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+
+      ctx.beginPath();
+
+      const points = 128; // Use lower bins for bass visualization
+      const reactFactor = 1 + activeBass * params.reactLow;
+
+      if (params.shape === "Linear") {
+        for (let i = 0; i < points; i++) {
+          const val = (currentFFT[i] / 255.0) || 0;
+          const x = (i / points) * width;
+          const y = height / 2 + (val * params.amplitude * reactFactor * (i%2===0 ? 1 : -1));
+          
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+      } else { // Circle
+        const cx = width / 2;
+        const cy = height / 2;
+        const baseRadius = Math.min(width, height) * 0.2;
+        for (let i = 0; i <= points; i++) {
+          const idx = i % points;
+          const val = (currentFFT[idx] / 255.0) || 0;
+          const angle = (i / points) * Math.PI * 2;
+          const rBase = baseRadius + (val * params.amplitude * reactFactor);
+          const x = cx + Math.cos(angle) * rBase;
+          const y = cy + Math.sin(angle) * rBase;
+
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+      }
+
+      ctx.stroke();
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

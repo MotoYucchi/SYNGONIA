@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "cornerSize", "label": "コーナーサイズ", "type": "range", "min": 50, "max": 500, "step": 5, "default": 200 },
+    { "id": "thickness", "label": "線の太さ", "type": "range", "min": 1, "max": 20, "step": 0.5, "default": 2.5 },
+    { "id": "glowIntensity", "label": "グロー強度", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.7 },
+    { "id": "pulseSpeed", "label": "パルス速度", "type": "range", "min": 0.1, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "arcCount", "label": "アーク数", "type": "range", "min": 1, "max": 12, "step": 1, "default": 4 },
+    { "id": "sizeReact", "label": "サイズ反応", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.5 },
+    { "id": "colorReactLow", "label": "Low→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 120 },
+    { "id": "colorReactMid", "label": "Mid→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 60 },
+    { "id": "colorReactHigh", "label": "High→色相", "type": "range", "min": 0, "max": 360, "step": 1, "default": 30 },
+    { "id": "smoothing", "label": "スムージング", "type": "range", "min": 0.05, "max": 0.5, "step": 0.01, "default": 0.15 },
+    { "id": "color", "label": "ベース色", "type": "color", "default": "#00ffcc" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let params = {
+  cornerSize: 200, glowIntensity: 0.7, pulseSpeed: 1.5, arcCount: 4,
+  sizeReact: 1.5,
+  colorReactLow: 120, colorReactMid: 60, colorReactHigh: 30,
+  smoothing: 0.15, color: '#00ffcc', opacity: 1.0,
+  shiftX: 0, shiftY: 0, thickness: 2.5,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let time = 0;
+let smoothLow = 0, smoothMid = 0, smoothHigh = 0;
+let prevLow = 0, prevMid = 0, prevHigh = 0;
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 255, b: 204 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) {
+    currentFFT = msg.fft;
+  } else if (msg.type === 'group_update') {
+    groupColorRgb = hexToRgb(msg.color);
+  }
+});
+
+function getLow() { let s = 0; for (let i = 0; i <= 10; i++) s += currentFFT[i]; return (s / 11) / 255; }
+function getMid() { let s = 0; for (let i = 20; i <= 60; i++) s += currentFFT[i]; return (s / 41) / 255; }
+function getHigh() { let s = 0; for (let i = 100; i <= 200; i++) s += currentFFT[i]; return (s / 101) / 255; }
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+}
+
+// 4隅の座標
+const corners = [
+  { xF: 0, yF: 0, startAngle: 0 },                    // TL
+  { xF: 1, yF: 0, startAngle: Math.PI * 0.5 },        // TR
+  { xF: 1, yF: 1, startAngle: Math.PI },               // BR
+  { xF: 0, yF: 1, startAngle: Math.PI * 1.5 }          // BL
+];
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawLow = getLow();
+  const rawMid = getMid();
+  const rawHigh = getHigh();
+
+  const sm = params.smoothing;
+  smoothLow += (rawLow - smoothLow) * sm;
+  smoothMid += (rawMid - smoothMid) * sm;
+  smoothHigh += (rawHigh - smoothHigh) * sm;
+
+  const deltaLow = Math.abs(rawLow - prevLow);
+  const deltaMid = Math.abs(rawMid - prevMid);
+  const deltaHigh = Math.abs(rawHigh - prevHigh);
+  prevLow = rawLow; prevMid = rawMid; prevHigh = rawHigh;
+
+  time += 0.016;
+  ctx.clearRect(0, 0, width, height);
+
+  const lRgb = hexToRgb(params.color);
+  const baseR = Math.min(255, lRgb.r + groupColorRgb.r);
+  const baseG = Math.min(255, lRgb.g + groupColorRgb.g);
+  const baseB = Math.min(255, lRgb.b + groupColorRgb.b);
+  const baseHue = (Math.atan2(baseB - 128, baseR - 128) * 180 / Math.PI + 360) % 360;
+
+  const shiftXPx = (params.shiftX / 100) * (width / 2);
+  const shiftYPx = (params.shiftY / 100) * (height / 2);
+
+  ctx.save();
+  ctx.translate(shiftXPx, shiftYPx);
+
+  const cSize = params.cornerSize * (1 + smoothLow * params.sizeReact);
+  const arcCount = Math.floor(params.arcCount);
+
+  for (let ci = 0; ci < corners.length; ci++) {
+    const c = corners[ci];
+    const cx = c.xF * width;
+    const cy = c.yF * height;
+
+    // グロー（放射グラデーション）
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cSize);
+    const glowHue = baseHue + smoothLow * params.colorReactLow + ci * 90;
+    const glowRgb = hslToRgb(glowHue, 0.8, 0.5 + smoothLow * 0.3);
+    const glowAlpha = params.glowIntensity * params.opacity * (0.3 + smoothLow * 0.7);
+    grad.addColorStop(0, `rgba(${glowRgb.r},${glowRgb.g},${glowRgb.b},${glowAlpha})`);
+    grad.addColorStop(0.5, `rgba(${glowRgb.r},${glowRgb.g},${glowRgb.b},${glowAlpha * 0.3})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(cx - cSize, cy - cSize, cSize * 2, cSize * 2);
+
+    // アーク（弧）
+    for (let a = 0; a < arcCount; a++) {
+      const arcAngle = c.startAngle + time * params.pulseSpeed * (1 + smoothMid) + a * (Math.PI * 0.5 / arcCount);
+      const arcRadius = cSize * (0.4 + a * 0.15);
+
+      const hue = baseHue
+        + smoothLow * params.colorReactLow
+        + deltaMid * params.colorReactMid * 3
+        + deltaHigh * params.colorReactHigh * 5
+        + ci * 90 + a * 25;
+      const sat = 0.8 + smoothMid * 0.2;
+      const lit = 0.4 + smoothHigh * 0.3 + deltaLow * 0.3;
+      const rgb = hslToRgb(hue, sat, lit);
+      const alpha = params.opacity * (0.4 + smoothLow * 0.6);
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, arcRadius, arcAngle, arcAngle + Math.PI * 0.4);
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.lineWidth = params.thickness + smoothLow * 4;
+      ctx.shadowColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+      ctx.shadowBlur = 10 + smoothLow * 15;
+      ctx.stroke();
+    }
+
+    // フラッシュ（deltaLow反応）
+    if (deltaLow > 0.08) {
+      const flashAlpha = Math.min(1, deltaLow * 3) * params.opacity;
+      const flashSize = cSize * 0.6;
+      const flashGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, flashSize);
+      flashGrad.addColorStop(0, `rgba(255,255,255,${flashAlpha * 0.8})`);
+      flashGrad.addColorStop(0.4, `rgba(255,255,255,${flashAlpha * 0.2})`);
+      flashGrad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = flashGrad;
+      ctx.fillRect(cx - flashSize, cy - flashSize, flashSize * 2, flashSize * 2);
+    }
+
+    // ハイハット反応: アーク先端スパーク
+    if (smoothHigh > 0.25) {
+      for (let sp = 0; sp < 3; sp++) {
+        const spAngle = c.startAngle + time * params.pulseSpeed * 2 + sp * 0.8;
+        const spR = cSize * 0.5;
+        const spX = cx + Math.cos(spAngle) * spR;
+        const spY = cy + Math.sin(spAngle) * spR;
+        const spSize = 2 + deltaHigh * 8;
+        ctx.beginPath();
+        ctx.arc(spX, spY, spSize, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${deltaHigh * 2 * params.opacity})`;
+        ctx.shadowBlur = 0;
+        ctx.fill();
+      }
+    }
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

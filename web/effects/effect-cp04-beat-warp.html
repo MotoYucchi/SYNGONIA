@@ -1,0 +1,235 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script id="vj-schema" type="application/json">
+    [
+      {"id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0},
+      {"id": "scale", "label": "Scale", "type": "range", "min": 0.1, "max": 3, "step": 0.1, "default": 1.0},
+      {"id": "speed", "label": "Speed", "type": "range", "min": -5, "max": 5, "step": 0.1, "default": 1.0},
+      {"id": "sensitivity", "label": "Beat Sensitivity", "type": "range", "min": 0.3, "max": 1.5, "step": 0.05, "default": 0.7},
+      {"id": "explosionForce", "label": "Explosion Force", "type": "range", "min": 0.5, "max": 3.0, "step": 0.1, "default": 1.6},
+      {"id": "recoverySpeed", "label": "Recovery Speed", "type": "range", "min": 0.02, "max": 0.25, "step": 0.01, "default": 0.08},
+      {"id": "scatterAmount", "label": "Scatter Amount", "type": "range", "min": 50, "max": 400, "step": 10, "default": 220},
+      {"id": "rgbSplit", "label": "RGB Split", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.5},
+      {"id": "flash", "label": "Flash Intensity", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.7},
+      {"id": "color", "label": "Color", "type": "color", "default": "#ff3366"},
+      {"id": "audioGain", "label": "Audio Gain", "type": "range", "min": 0, "max": 3, "step": 0.1, "default": 1.0}
+    ]
+  </script>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: true });
+    let width = 1920, height = 1080, cx = 960, cy = 540;
+
+    function resize() {
+      width = canvas.width = Math.max(1, window.innerWidth || 1920);
+      height = canvas.height = Math.max(1, window.innerHeight || 1080);
+      cx = width / 2;
+      cy = height / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let params = {
+      opacity: 1.0,
+      scale: 1.0,
+      speed: 1.0,
+      sensitivity: 0.7,
+      explosionForce: 1.6,
+      recoverySpeed: 0.08,
+      scatterAmount: 220,
+      rgbSplit: 0.5,
+      flash: 0.7,
+      color: "#ff3366",
+      audioGain: 1.0
+    };
+
+    let currentFFT = new Array(512).fill(0);
+    let groupColorRgb = { r: 0, g: 0, b: 0 };
+    let isVisible = true;
+    let isAnimating = true;
+    let time = 0;
+    let explosionProgress = 0; // 0 = 静止, 1.0+ = 爆発中
+    let flashAlpha = 0;
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 51, b: 102 };
+    }
+
+    function calculateModColor(layerHex, gRgb, alpha = params.opacity) {
+      const lRgb = hexToRgb(layerHex || "#ff3366");
+      const r = (lRgb.r + (gRgb ? gRgb.r : 0)) % 256;
+      const g = (lRgb.g + (gRgb ? gRgb.g : 0)) % 256;
+      const b = (lRgb.b + (gRgb ? gRgb.b : 0)) % 256;
+      const safeAlpha = Math.max(0, Math.min(1, isNaN(alpha) ? 1.0 : Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === 'visibility') {
+        isVisible = !!msg.visible;
+        if (isVisible && !isAnimating) {
+          isAnimating = true;
+          requestAnimationFrame(render);
+        }
+        return;
+      }
+      if (msg.type === 'param_update') {
+        if (['color'].includes(msg.paramId)) {
+          params[msg.paramId] = msg.value;
+        } else {
+          params[msg.paramId] = Number(msg.value);
+        }
+      } else if (msg.type === 'audio_data' && msg.fft) {
+        currentFFT = msg.fft;
+      } else if (msg.type === 'group_update') {
+        groupColorRgb = hexToRgb(msg.color);
+      }
+    });
+
+    // 幾何学マトリックスコア描画
+    function drawMatrixCore(c, rad, bass) {
+      c.beginPath();
+      // ダイヤ型フレーム
+      c.moveTo(0, -rad);
+      c.lineTo(rad, 0);
+      c.lineTo(0, rad);
+      c.lineTo(-rad, 0);
+      c.closePath();
+      c.stroke();
+
+      // 十字レーザーガイド
+      c.beginPath();
+      c.moveTo(-rad * 1.3, 0); c.lineTo(rad * 1.3, 0);
+      c.moveTo(0, -rad * 1.3); c.lineTo(0, rad * 1.3);
+      c.stroke();
+
+      // 内接サークル
+      c.beginPath();
+      c.arc(0, 0, rad * 0.5 * (1.0 + bass * 0.3), 0, Math.PI * 2);
+      c.stroke();
+    }
+
+    function render() {
+      if (!isVisible) {
+        isAnimating = false;
+        return;
+      }
+
+      if (width <= 1 || height <= 1) {
+        resize();
+        if (width <= 1 || height <= 1) {
+          requestAnimationFrame(render);
+          return;
+        }
+      }
+
+      // Audio analysis
+      const bass = ((currentFFT[1] + currentFFT[2] + currentFFT[3] + currentFFT[4]) / 4 / 255.0 || 0) * (params.audioGain || 1.0);
+      let highSum = 0; for (let i = 80; i <= 140; i++) highSum += currentFFT[i];
+      const high = ((highSum / 61) / 255.0 || 0) * (params.audioGain || 1.0);
+
+      time += (params.speed !== undefined ? params.speed : 1.0) * 0.02;
+
+      // ビート爆発トリガー検出
+      const threshold = 0.65 / Math.max(0.1, params.sensitivity || 0.7);
+      if (bass > threshold && explosionProgress < 0.25) {
+        explosionProgress = 1.0 * (params.explosionForce || 1.6);
+        flashAlpha = Math.min(1.0, params.flash || 0.7);
+      }
+
+      // 指数関数的滑らかリカバリー
+      const recSpeed = params.recoverySpeed || 0.08;
+      explosionProgress = Math.max(0, explosionProgress - recSpeed);
+      flashAlpha = Math.max(0, flashAlpha - 0.1);
+
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // ── Flash レイヤー ──
+      if (flashAlpha > 0.01) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha * (params.opacity || 1.0)})`;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      ctx.translate(cx, cy);
+      const baseScale = (params.scale || 1.0);
+      ctx.scale(baseScale, baseScale);
+
+      // ── Copy 1: センターコア（平常時にも常時稼働） ──
+      ctx.save();
+      ctx.rotate(time * 0.4);
+      ctx.lineWidth = 2 + high * 3;
+      ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, params.opacity);
+      drawMatrixCore(ctx, 110 + bass * 35, bass);
+      ctx.restore();
+
+      // ── Copy 2〜5: 4方向散乱ワープコピー（Beat時のみ爆発拡大） ──
+      if (explosionProgress > 0.01) {
+        const scatterDist = (params.scatterAmount || 220) * explosionProgress;
+        const warpScale = 1.0 + explosionProgress * 0.8;
+        const warpRot = explosionProgress * 1.5;
+        const rgbSeparation = (params.rgbSplit || 0.5) * explosionProgress * 30;
+
+        ctx.globalCompositeOperation = "lighter";
+
+        // 4象限ベクトル (Copy 2: 右上, Copy 3: 右下, Copy 4: 左下, Copy 5: 左上)
+        const directions = [
+          { x: 1, y: -1, angle: Math.PI / 4 },
+          { x: 1, y: 1, angle: (3 * Math.PI) / 4 },
+          { x: -1, y: 1, angle: (5 * Math.PI) / 4 },
+          { x: -1, y: -1, angle: (7 * Math.PI) / 4 }
+        ];
+
+        directions.forEach((dir, copyIdx) => {
+          ctx.save();
+          ctx.translate(dir.x * scatterDist, dir.y * scatterDist);
+          ctx.scale(warpScale, warpScale);
+          ctx.rotate(warpRot * (copyIdx % 2 === 0 ? 1 : -1));
+
+          const copyAlpha = (params.opacity || 1.0) * Math.min(1.0, explosionProgress * 1.2);
+          ctx.lineWidth = 2 + high * 5;
+
+          // RGB Split 描画
+          if (rgbSeparation > 1) {
+            ctx.save();
+            ctx.translate(-rgbSeparation, 0);
+            ctx.strokeStyle = `rgba(255, 40, 80, ${copyAlpha * 0.6})`;
+            drawMatrixCore(ctx, 90, bass);
+            ctx.restore();
+
+            ctx.save();
+            ctx.translate(rgbSeparation, 0);
+            ctx.strokeStyle = `rgba(0, 240, 255, ${copyAlpha * 0.6})`;
+            drawMatrixCore(ctx, 90, bass);
+            ctx.restore();
+          }
+
+          ctx.strokeStyle = calculateModColor(params.color, groupColorRgb, copyAlpha);
+          drawMatrixCore(ctx, 90, bass);
+
+          ctx.restore();
+        });
+      }
+
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

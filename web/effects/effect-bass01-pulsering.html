@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "bassFreqLow", "label": "Bass Freq Low", "type": "range", "min": 0, "max": 50, "step": 1, "default": 0 },
+    { "id": "bassFreqHigh", "label": "Bass Freq High", "type": "range", "min": 1, "max": 80, "step": 1, "default": 10 },
+    { "id": "bassThreshold", "label": "Bass Threshold", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.1 },
+    { "id": "bassSense", "label": "Bass Sensitivity", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "ringCount", "label": "Ring Count", "type": "range", "min": 1, "max": 12, "step": 1, "default": 5 },
+    { "id": "ringSpacing", "label": "Ring Spacing", "type": "range", "min": 10, "max": 200, "step": 1, "default": 50 },
+    { "id": "thickness", "label": "Line Thickness", "type": "range", "min": 1, "max": 30, "step": 0.5, "default": 4 },
+    { "id": "color", "label": "Base Color", "type": "color", "default": "#ff00ff" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "mode", "label": "Mode", "type": "select", "options": ["Single", "Multi", "Double"], "default": "Multi" },
+    { "id": "hueSource", "label": "Hue Band", "type": "select", "options": ["None", "Low", "Mid", "High"], "default": "None" },
+    { "id": "hueAmount", "label": "Hue Amount", "type": "range", "min": -360, "max": 360, "step": 1, "default": 90 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height, cx, cy;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+  cx = width / 2;
+  cy = height / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let params = {
+  bassFreqLow: 0, bassFreqHigh: 10, bassThreshold: 0.1, bassSense: 1.5,
+  ringCount: 5, ringSpacing: 50, thickness: 4, color: '#ff00ff',
+  opacity: 1.0, mode: 'Multi',
+  hueSource: 'None', hueAmount: 90, shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let time = 0;
+let smoothBass = 0;
+
+// --- Utility ---
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 255, g: 0, b: 255 };
+}
+
+// --- Message ---
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color', 'mode', 'hueSource'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) {
+    currentFFT = msg.fft;
+  } else if (msg.type === 'group_update') {
+    groupColorRgb = hexToRgb(msg.color);
+  }
+});
+
+// --- Bass解析（周波数帯変更可能） ---
+function getConfigurableBass() {
+  const lo = Math.max(0, Math.floor(params.bassFreqLow));
+  const hi = Math.min(511, Math.floor(params.bassFreqHigh));
+  if (hi <= lo) return 0;
+  let sum = 0;
+  for (let i = lo; i <= hi; i++) sum += currentFFT[i];
+  return (sum / (hi - lo + 1)) / 255;
+}
+
+function getMid() {
+  let sum = 0;
+  for (let i = 20; i <= 30; i++) sum += currentFFT[i];
+  return (sum / 11) / 255;
+}
+
+function getHigh() {
+  let sum = 0;
+  for (let i = 100; i <= 120; i++) sum += currentFFT[i];
+  return (sum / 21) / 255;
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawBass = getConfigurableBass();
+  const mid = getMid();
+  const high = getHigh();
+
+  // Threshold: 下限値以下ならOpacity=0
+  const bassActive = rawBass > params.bassThreshold
+    ? (rawBass - params.bassThreshold) / (1 - params.bassThreshold)
+    : 0;
+
+  // スムージング
+  smoothBass += (bassActive - smoothBass) * 0.3;
+  const bass = smoothBass * params.bassSense;
+
+  time += 0.016;
+  ctx.clearRect(0, 0, width, height);
+
+  // --- Audio Reactive Hue ---
+  let _hueVal = 0;
+  if (params.hueSource === 'Low') _hueVal = rawBass;
+  else if (params.hueSource === 'Mid') _hueVal = mid;
+  else if (params.hueSource === 'High') _hueVal = high;
+  const _hueDeg = _hueVal * params.hueAmount;
+  canvas.style.filter = _hueDeg !== 0 ? `hue-rotate(${_hueDeg}deg)` : '';
+
+  // 色計算
+  const lRgb = hexToRgb(params.color);
+  const r = Math.min(255, lRgb.r + groupColorRgb.r);
+      const g = Math.min(255, lRgb.g + groupColorRgb.g);
+      const b = Math.min(255, lRgb.b + groupColorRgb.b);
+
+  // bassActiveが0ならスキップ（Opacity連動）
+  if (bassActive <= 0) {
+    requestAnimationFrame(render);
+    return;
+  }
+
+  ctx.save();
+  const shiftOffsetX = (params.shiftX || 0) / 100 * cx;
+  const shiftOffsetY = (params.shiftY || 0) / 100 * cy;
+  ctx.translate(cx + shiftOffsetX, cy + shiftOffsetY);
+
+  const globalAlpha = bassActive * params.opacity;
+
+  for (let i = 0; i < params.ringCount; i++) {
+    const baseRadius = (i + 1) * params.ringSpacing;
+    const pulseScale = 1 + bass * 0.6;
+    const radius = baseRadius * pulseScale;
+    const breathe = 1 + Math.sin(time * 2 + i * 0.5) * 0.05;
+    const lineW = params.thickness * breathe * (1 + bass * 0.3);
+    const alpha = globalAlpha * (1 - i * 0.06);
+
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${Math.max(0, alpha)})`;
+    ctx.lineWidth = lineW;
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`;
+    ctx.shadowBlur = bass * 20;
+
+    switch (params.mode) {
+      case 'Single':
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+
+      case 'Multi':
+        ctx.beginPath();
+        const pts = 90;
+        for (let j = 0; j <= pts; j++) {
+          const angle = (j / pts) * Math.PI * 2;
+          const wobble = Math.sin(angle * 4 + time * 3 + i) * radius * 0.05 * bass;
+          const rr = radius + wobble;
+          const px = Math.cos(angle) * rr;
+          const py = Math.sin(angle) * rr;
+          j === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        break;
+
+      case 'Double':
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        // 対称リング（位相反転）
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+    }
+  }
+
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

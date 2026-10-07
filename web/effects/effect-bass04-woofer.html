@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script id="vj-schema" type="application/json">
+  [
+    { "id": "bassFreqLow", "label": "Bass Freq Low", "type": "range", "min": 0, "max": 50, "step": 1, "default": 0 },
+    { "id": "bassFreqHigh", "label": "Bass Freq High", "type": "range", "min": 1, "max": 80, "step": 1, "default": 10 },
+    { "id": "bassThreshold", "label": "Bass Threshold", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 0.1 },
+    { "id": "bassSense", "label": "Bass Sensitivity", "type": "range", "min": 0, "max": 5, "step": 0.1, "default": 1.5 },
+    { "id": "coneSize", "label": "Cone Size", "type": "range", "min": 50, "max": 500, "step": 5, "default": 200 },
+    { "id": "vibration", "label": "Vibration Amount", "type": "range", "min": 0, "max": 50, "step": 1, "default": 20 },
+    { "id": "ringCount", "label": "Ring Count", "type": "range", "min": 3, "max": 20, "step": 1, "default": 8 },
+    { "id": "color", "label": "Base Color", "type": "color", "default": "#8844ff" },
+    { "id": "opacity", "label": "Opacity", "type": "range", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
+    { "id": "hueSource", "label": "Hue Band", "type": "select", "options": ["None", "Low", "Mid", "High"], "default": "None" },
+    { "id": "hueAmount", "label": "Hue Amount", "type": "range", "min": -360, "max": 360, "step": 1, "default": 90 },
+    { "id": "shiftX", "label": "Shift X", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 },
+    { "id": "shiftY", "label": "Shift Y", "type": "range", "min": -100, "max": 100, "step": 1, "default": 0 }
+  ]
+</script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height, cx, cy;
+function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; cx = width/2; cy = height/2; }
+window.addEventListener('resize', resize); resize();
+
+let params = {
+  bassFreqLow: 0, bassFreqHigh: 10, bassThreshold: 0.1, bassSense: 1.5,
+  coneSize: 200, vibration: 20, ringCount: 8,
+  color: '#8844ff', opacity: 1.0,
+  hueSource: 'None', hueAmount: 90, shiftX: 0, shiftY: 0,
+  baseR: 0, baseG: 255, baseB: 255, baseA: 1.0
+};
+let currentFFT = new Array(512).fill(0);
+let groupColorRgb = { r: 0, g: 0, b: 0 };
+let smoothBass = 0, time = 0;
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : { r:136,g:68,b:255 };
+}
+
+
+    let isVisible = true;
+    let isAnimating = true;
+
+    window.addEventListener('message', (e) => {
+  const msg = e.data;
+    if (msg.type === 'visibility') {
+      isVisible = !!msg.visible;
+      if (isVisible && !isAnimating) {
+        isAnimating = true;
+        requestAnimationFrame(render);
+      }
+      return;
+    }
+  if (msg.type === 'param_update') {
+    if (msg.paramId === 'baseA') document.body.style.opacity = msg.value;
+    params[msg.paramId] = ['color','hueSource'].includes(msg.paramId) ? msg.value : Number(msg.value);
+  } else if (msg.type === 'audio_data' && msg.fft) currentFFT = msg.fft;
+  else if (msg.type === 'group_update') groupColorRgb = hexToRgb(msg.color);
+});
+
+function getBass() {
+  const lo = Math.max(0, params.bassFreqLow), hi = Math.min(511, params.bassFreqHigh);
+  if (hi <= lo) return 0;
+  let s = 0; for (let i = lo; i <= hi; i++) s += currentFFT[i];
+  return (s / (hi - lo + 1)) / 255;
+}
+
+function render() {
+      if (!isVisible) { isAnimating = false; return; }
+  const rawBass = getBass();
+  const bassActive = rawBass > params.bassThreshold
+    ? (rawBass - params.bassThreshold) / (1 - params.bassThreshold) : 0;
+  smoothBass += (bassActive - smoothBass) * 0.35;
+  const bass = smoothBass * params.bassSense;
+  time += 0.016;
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Hue
+  let hv = 0;
+  if (params.hueSource === 'Low') hv = rawBass;
+  else if (params.hueSource === 'Mid') { let s=0; for(let i=20;i<=30;i++) s+=currentFFT[i]; hv=s/11/255; }
+  else if (params.hueSource === 'High') { let s=0; for(let i=100;i<=120;i++) s+=currentFFT[i]; hv=s/21/255; }
+  canvas.style.filter = hv ? `hue-rotate(${hv*params.hueAmount}deg)` : '';
+
+  if (bassActive <= 0) { requestAnimationFrame(render); return; }
+
+  const lRgb = hexToRgb(params.color);
+  const r = Math.min(255, lRgb.r+groupColorRgb.r), g = Math.min(255, lRgb.g+groupColorRgb.g), b = Math.min(255, lRgb.b+groupColorRgb.b);
+
+  ctx.save();
+  ctx.translate(cx + (params.shiftX||0)/100*cx, cy + (params.shiftY||0)/100*cy);
+
+  const size = params.coneSize;
+  const vib = params.vibration * bass;
+  const pistonOffset = Math.sin(time * 15) * vib;
+
+  // ウーファーコーン描画
+  const alpha = bassActive * params.opacity;
+
+  // 外枠
+  ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+  ctx.lineWidth = 3;
+  ctx.shadowColor = `rgba(${r},${g},${b},${alpha*0.5})`;
+  ctx.shadowBlur = bass * 20;
+  ctx.beginPath();
+  ctx.arc(0, 0, size, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 同心円リング（コーン模様）
+  for (let i = 1; i <= params.ringCount; i++) {
+    const ratio = i / params.ringCount;
+    const ringR = size * ratio;
+    const depth = pistonOffset * (1 - ratio * 0.5);
+    const ringAlpha = alpha * (0.3 + ratio * 0.5);
+
+    ctx.strokeStyle = `rgba(${r},${g},${b},${ringAlpha})`;
+    ctx.lineWidth = 1.5 + bass * 2 * ratio;
+    ctx.beginPath();
+    ctx.arc(0, depth * ratio, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // 放射線（コーンのリブ）
+  const ribs = 12;
+  ctx.lineWidth = 1 + bass;
+  ctx.strokeStyle = `rgba(${r},${g},${b},${alpha * 0.4})`;
+  for (let i = 0; i < ribs; i++) {
+    const angle = (i / ribs) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(angle) * size * 0.15, Math.sin(angle) * size * 0.15 + pistonOffset * 0.8);
+    ctx.lineTo(Math.cos(angle) * size, Math.sin(angle) * size);
+    ctx.stroke();
+  }
+
+  // 中心ダストキャップ
+  const dustR = size * 0.15;
+  ctx.fillStyle = `rgba(${r},${g},${b},${alpha * 0.6})`;
+  ctx.shadowBlur = bass * 30;
+  ctx.beginPath();
+  ctx.arc(0, pistonOffset * 0.8, dustR + bass * 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 振動波紋
+  if (bass > 0.3) {
+    const waveR = size + bass * 80;
+    ctx.strokeStyle = `rgba(${r},${g},${b},${alpha * 0.2 * bass})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, waveR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>
