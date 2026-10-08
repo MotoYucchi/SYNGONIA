@@ -94,6 +94,8 @@ pub struct MasterState {
     pub blackout: bool,
     /// 画面静止
     pub freeze: bool,
+    /// 現場疎通テストパターン送出モード
+    pub test_pattern: bool,
     /// マスタークロスフェーダー (0.0: Deck A - 1.0: Deck B)
     pub master_xfader: f64,
     /// マスターBPM
@@ -105,6 +107,7 @@ impl Default for MasterState {
         Self {
             blackout: false,
             freeze: false,
+            test_pattern: true, // 起動時は即座に疎通確認できるようテストパターン有効
             master_xfader: 0.0,
             bpm: 128.0,
         }
@@ -215,10 +218,14 @@ impl Default for SyngoniaState {
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// 状態管理マネージャー
 pub struct StateManager {
     state: RwLock<SyngoniaState>,
     storage_dir: PathBuf,
+    atomic_blackout: AtomicBool,
+    atomic_test_pattern: AtomicBool,
 }
 
 impl StateManager {
@@ -227,11 +234,25 @@ impl StateManager {
         std::fs::create_dir_all(&storage_dir).ok();
 
         let initial_state = Self::load_from_disk(&storage_dir).unwrap_or_default();
+        let blackout = initial_state.master.blackout;
+        let test_pattern = initial_state.master.test_pattern;
 
         Self {
             state: RwLock::new(initial_state),
             storage_dir,
+            atomic_blackout: AtomicBool::new(blackout),
+            atomic_test_pattern: AtomicBool::new(test_pattern),
         }
+    }
+
+    /// レンダー専用スレッド向け ロックフリー ブラックアウト判定
+    pub fn is_blackout(&self) -> bool {
+        self.atomic_blackout.load(Ordering::Relaxed)
+    }
+
+    /// レンダー専用スレッド向け ロックフリー テストパターン判定
+    pub fn is_test_pattern(&self) -> bool {
+        self.atomic_test_pattern.load(Ordering::Relaxed)
     }
 
     /// 完全スナップショットの取得（SnapSync用）
@@ -263,11 +284,18 @@ impl StateManager {
             "blackout" => {
                 if let ParamValue::Bool(b) = value {
                     state.master.blackout = b;
+                    self.atomic_blackout.store(b, Ordering::Relaxed);
                 }
             }
             "freeze" => {
                 if let ParamValue::Bool(b) = value {
                     state.master.freeze = b;
+                }
+            }
+            "test_pattern" => {
+                if let ParamValue::Bool(b) = value {
+                    state.master.test_pattern = b;
+                    self.atomic_test_pattern.store(b, Ordering::Relaxed);
                 }
             }
             "player_opacity" => {

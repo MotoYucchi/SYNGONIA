@@ -53,12 +53,27 @@
     #blackout-overlay.active {
       display: block;
     }
+
+    /* Test Pattern Overlay */
+    #test-pattern-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 9998;
+      display: none;
+    }
+
+    #test-pattern-canvas.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
   <div id="stage">
     <video id="video-layer" autoplay loop muted playsinline></video>
     <canvas id="fx-canvas"></canvas>
+    <canvas id="test-pattern-canvas"></canvas>
     <div id="blackout-overlay"></div>
   </div>
 
@@ -73,10 +88,15 @@
     const canvas = document.getElementById('fx-canvas');
     const ctx = canvas.getContext('2d', { alpha: true });
     const blackoutEl = document.getElementById('blackout-overlay');
+    const tpCanvas = document.getElementById('test-pattern-canvas');
+    const tpCtx = tpCanvas.getContext('2d');
+    let isTestPattern = true;
 
     function resize() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      tpCanvas.width = window.innerWidth;
+      tpCanvas.height = window.innerHeight;
     }
     window.addEventListener('resize', resize);
     resize();
@@ -121,6 +141,8 @@
         if (msg.state && msg.state.master) {
           blackoutEl.classList.toggle('active', !!msg.state.master.blackout);
           isFreeze = !!msg.state.master.freeze;
+          isTestPattern = msg.state.master.test_pattern !== false;
+          tpCanvas.classList.toggle('active', isTestPattern);
         }
       } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
         currentDeck = msg.layers;
@@ -135,6 +157,10 @@
       } else if (msg.type === 'panic_action') {
         if (msg.action === 'blackout') blackoutEl.classList.toggle('active', !!msg.value);
         if (msg.action === 'freeze') isFreeze = !!msg.value;
+        if (msg.action === 'test_pattern') {
+          isTestPattern = !!msg.value;
+          tpCanvas.classList.toggle('active', isTestPattern);
+        }
         if (msg.action === 'fx_kill') {
           currentDeck.forEach(g => { if (g.params) g.params.opacity = 0; });
         }
@@ -228,6 +254,68 @@
 
         ctx.restore();
       });
+
+      // テストパターン描画 (有効時)
+      if (isTestPattern) {
+        drawTestPattern();
+      }
+    }
+
+    let tpFrame = 0;
+    function drawTestPattern() {
+      tpFrame++;
+      const w = tpCanvas.width;
+      const h = tpCanvas.height;
+      tpCtx.clearRect(0, 0, w, h);
+
+      // 7色 SMPTE バー
+      const colors = [
+        '#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'
+      ];
+      const barW = w / colors.len ? w / 7 : w / 7;
+      const topH = h * 0.70;
+      const midH = h * 0.85;
+
+      colors.forEach((col, i) => {
+        tpCtx.fillStyle = col;
+        tpCtx.fillRect(i * (w / 7), 0, w / 7 + 1, topH);
+      });
+
+      // 中間グレーグラデーション
+      const grad = tpCtx.createLinearGradient(0, topH, w, topH);
+      grad.addColorStop(0, '#000');
+      grad.addColorStop(1, '#fff');
+      tpCtx.fillStyle = grad;
+      tpCtx.fillRect(0, topH, w, midH - topH);
+
+      // 下部エリア (黒背景 + 動くシアンブロック)
+      tpCtx.fillStyle = '#10141c';
+      tpCtx.fillRect(0, midH, w, h - midH);
+
+      const blockW = 120;
+      const maxTravel = w - blockW;
+      const cycle = maxTravel * 2;
+      const phase = (tpFrame * 6) % cycle;
+      const blockX = phase < maxTravel ? phase : cycle - phase;
+
+      tpCtx.fillStyle = '#00ffff';
+      tpCtx.fillRect(blockX, midH, blockW, h - midH);
+
+      // ビートインジケーター (右端)
+      const beatLit = (tpFrame % 60) < 15;
+      tpCtx.fillStyle = beatLit ? '#ff3232' : '#222';
+      tpCtx.fillRect(w - 100, h - 50, 90, 40);
+      tpCtx.fillStyle = '#fff';
+      tpCtx.font = 'bold 12px monospace';
+      tpCtx.fillText('60 FPS', w - 85, h - 25);
+
+      // センタークロスヘア
+      tpCtx.strokeStyle = 'rgba(255,255,255,0.7)';
+      tpCtx.lineWidth = 1;
+      tpCtx.beginPath();
+      tpCtx.moveTo(w / 2, 0); tpCtx.lineTo(w / 2, h);
+      tpCtx.moveTo(0, h / 2); tpCtx.lineTo(w, h / 2);
+      tpCtx.stroke();
     }
 
     connectWs();

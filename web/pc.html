@@ -97,6 +97,12 @@
       box-shadow: 0 0 12px var(--cyan);
     }
 
+    .tips-toggle-btn.active {
+      background: var(--amber);
+      color: #000 !important;
+      box-shadow: 0 0 16px var(--amber);
+    }
+
     /* === Main Work Area === */
     .main-layout {
       flex: 1;
@@ -295,6 +301,9 @@
     </div>
 
     <div class="header-actions">
+      <button type="button" id="btn-test-pattern" class="tips-toggle-btn active" onclick="toggleTestPattern()" style="border-color: var(--amber); color: var(--amber);">
+        <i class="fas fa-barcode"></i> TEST PATTERN
+      </button>
       <button type="button" class="tips-toggle-btn" onclick="toggleTipsDrawer()">
         <i class="fas fa-lightbulb"></i> 現場 TIPS & 接続
       </button>
@@ -347,6 +356,21 @@
             <span class="hud-label">FLYWHEEL BPM</span>
             <span id="bpm-val" class="hud-value">128.0</span>
           </div>
+        </div>
+
+        <!-- GPU Adapter Selector for OBS Multi-GPU Fix -->
+        <div style="margin-top: 10px; padding: 10px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span class="hud-label">SPOUT GPU ADAPTER</span>
+            <span id="hud-spout-adapter" style="font-size: 11px; font-weight: 800; color: var(--cyan);">NVIDIA RTX 4060</span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button type="button" class="tips-toggle-btn" style="flex: 1; padding: 4px; font-size: 10px; justify-content: center;" onclick="switchGpuAdapter(0)">RTX 4060 に固定</button>
+            <button type="button" class="tips-toggle-btn" style="flex: 1; padding: 4px; font-size: 10px; justify-content: center;" onclick="switchGpuAdapter(1)">Iris Xe に固定</button>
+          </div>
+          <p style="font-size: 9px; color: var(--text-muted); margin-top: 6px;">
+            ※OBSで映像が黒い場合、OBSと同一のGPUを選択してください。
+          </p>
         </div>
       </div>
 
@@ -410,9 +434,18 @@
           currentDeck = msg.state.decks[deckId];
           renderChannels();
         }
+        if (msg.state && msg.state.master) {
+          isTestPattern = msg.state.master.test_pattern !== false;
+          updateTestPatternUi();
+        }
       } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
         currentDeck = msg.layers;
         renderChannels();
+      } else if (msg.type === 'panic_action') {
+        if (msg.action === 'test_pattern') {
+          isTestPattern = !!msg.value;
+          updateTestPatternUi();
+        }
       } else if (msg.type === 'param_update' && msg.deckId === deckId) {
         const slider = document.querySelector(`.h-slider[data-group="${msg.groupId}"][data-param="${msg.paramId}"]`);
         if (slider && slider.dataset.dragging !== "true") {
@@ -499,17 +532,62 @@
       }
     }
 
+    let isTestPattern = true;
+
+    window.toggleTestPattern = () => {
+      isTestPattern = !isTestPattern;
+      sendWs({ type: 'panic_action', action: 'test_pattern', value: isTestPattern });
+      updateTestPatternUi();
+    };
+
+    function updateTestPatternUi() {
+      const btn = document.getElementById('btn-test-pattern');
+      if (btn) btn.classList.toggle('active', isTestPattern);
+    }
+
+    // Spout & System Status Poller
+    async function pollSpoutStatus() {
+      try {
+        const res = await fetch('/api/spout_status');
+        const data = await res.json();
+        const statEl = document.getElementById('hud-spout-status');
+        if (statEl) {
+          statEl.textContent = data.initialized ? 'ACTIVE' : data.status;
+          statEl.style.color = data.initialized ? 'var(--neon-green)' : 'var(--amber)';
+        }
+        const adapterEl = document.getElementById('hud-spout-adapter');
+        if (adapterEl && data.adapter_name) {
+          adapterEl.textContent = data.adapter_name;
+        }
+      } catch (e) {}
+    }
+    setInterval(pollSpoutStatus, 2000);
+
+    window.switchGpuAdapter = async (idx) => {
+      try {
+        const res = await fetch(`/api/spout_adapter?index=${idx}`, { method: 'POST' });
+        const data = await res.json();
+        pollSpoutStatus();
+      } catch (e) {
+        console.error('Failed to switch adapter:', e);
+      }
+    };
+
     // Keybindings
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') {
         e.preventDefault();
         sendWs({ type: 'panic_action', action: 'blackout', value: true });
+      } else if (e.code === 'KeyT' && e.altKey) {
+        e.preventDefault();
+        toggleTestPattern();
       }
     });
 
     // Launch
     connectWs();
     loadEndpoints();
+    pollSpoutStatus();
   </script>
 </body>
 </html>

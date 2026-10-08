@@ -236,6 +236,12 @@ impl WsManager {
                                             .update_param("deck-a", None, None, "freeze", ParamValue::Bool(f))
                                             .await;
                                     }
+                                    "test_pattern" => {
+                                        let tp = value.unwrap_or(true);
+                                        state_manager
+                                            .update_param("deck-a", None, None, "test_pattern", ParamValue::Bool(tp))
+                                            .await;
+                                    }
                                     "fx_kill" => {
                                         state_manager.fx_kill().await;
                                     }

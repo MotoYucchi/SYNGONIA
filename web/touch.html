@@ -137,6 +137,12 @@
       box-shadow: 0 0 15px var(--danger-red);
     }
 
+    .panic-btn.test-pattern.active {
+      background: var(--warning-yellow);
+      color: #000;
+      box-shadow: 0 0 15px var(--warning-yellow);
+    }
+
     .panic-btn.freeze.active {
       background: var(--cyan);
       color: #000;
@@ -375,6 +381,9 @@
 
     <!-- Emergency & Panics -->
     <div class="header-controls">
+      <button type="button" id="btn-test-pattern" class="panic-btn test-pattern active" onclick="toggleTestPattern()" style="border-color: rgba(255, 184, 0, 0.6); color: var(--warning-yellow);">
+        <i class="fas fa-barcode"></i> TEST PATTERN
+      </button>
       <button type="button" id="btn-blackout" class="panic-btn blackout" onclick="toggleBlackout()">
         <i class="fas fa-eye-slash"></i> BLACKOUT
       </button>
@@ -400,6 +409,7 @@
     let currentDeck = [];
     let isBlackout = false;
     let isFreeze = false;
+    let isTestPattern = true;
 
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
@@ -472,6 +482,7 @@
         if (msg.state && msg.state.master) {
           isBlackout = msg.state.master.blackout;
           isFreeze = msg.state.master.freeze;
+          isTestPattern = msg.state.master.test_pattern !== false;
           updatePanicUi();
         }
       } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
@@ -482,6 +493,7 @@
       } else if (msg.type === 'panic_action') {
         if (msg.action === 'blackout') isBlackout = !!msg.value;
         if (msg.action === 'freeze') isFreeze = !!msg.value;
+        if (msg.action === 'test_pattern') isTestPattern = !!msg.value;
         if (msg.action === 'fx_kill') {
           currentDeck.forEach(g => { if (g.params) g.params.opacity = 0; });
           renderChannels();
@@ -635,6 +647,12 @@
     }
 
     // === Panic Operations ===
+    window.toggleTestPattern = () => {
+      isTestPattern = !isTestPattern;
+      sendWs({ type: 'panic_action', action: 'test_pattern', value: isTestPattern });
+      updatePanicUi();
+    };
+
     window.toggleBlackout = () => {
       isBlackout = !isBlackout;
       sendWs({ type: 'panic_action', action: 'blackout', value: isBlackout });
@@ -652,6 +670,8 @@
     };
 
     function updatePanicUi() {
+      const tpBtn = document.getElementById('btn-test-pattern');
+      if (tpBtn) tpBtn.classList.toggle('active', isTestPattern);
       document.getElementById('btn-blackout').classList.toggle('active', isBlackout);
       document.getElementById('btn-freeze').classList.toggle('active', isFreeze);
     }

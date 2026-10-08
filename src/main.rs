@@ -17,7 +17,7 @@ mod ws;
 
 use audio::AudioDspEngine;
 use network::NetworkManager;
-use spout::SpoutSender;
+use spout::{spawn_spout_render_thread, SpoutController};
 use state::StateManager;
 use ws::WsManager;
 
@@ -28,7 +28,6 @@ use axum::{Json, Router};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -36,7 +35,7 @@ use tower_http::services::ServeDir;
 struct AppContext {
     state_manager: Arc<StateManager>,
     ws_manager: WsManager,
-    spout_sender: Arc<Mutex<SpoutSender>>,
+    spout_controller: SpoutController,
     port: u16,
 }
 
@@ -71,48 +70,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (audio_engine, audio_rx) = AudioDspEngine::new(64);
     audio_engine.start();
 
-    // 3. Spout2 センダー初期化 ("SYNGONIA" 1080p ゼロ遅延送信)
-    let spout_sender = Arc::new(Mutex::new(SpoutSender::new("SYNGONIA", 1920, 1080)));
-
-    // バックグラウンド Spout2 フレーム送信ループ (60fps)
-    let spout_clone = Arc::clone(&spout_sender);
-    let state_clone = Arc::clone(&state_manager);
-    tokio::spawn(async move {
-        let width = 1920usize;
-        let height = 1080usize;
-        let mut frame_buffer = vec![0u8; width * height * 4];
-        let mut time = 0.0f32;
-
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
-            time += 0.016;
-
-            // スナップショット状態の取得
-            let is_blackout = state_clone.get_snapshot().await.master.blackout;
-
-            if is_blackout {
-                frame_buffer.fill(0); // 完全暗転
-            } else {
-                // テスト用リアルタイムカラーパルス
-                let pulse = (time * 2.0).sin().abs();
-                let r = (pulse * 20.0) as u8;
-                let g = ((1.0 - pulse) * 30.0) as u8;
-                let b = 50u8;
-
-                // バッファクリア
-                for pixel in frame_buffer.chunks_exact_mut(4) {
-                    pixel[0] = r;
-                    pixel[1] = g;
-                    pixel[2] = b;
-                    pixel[3] = 255;
-                }
-            }
-
-            if let Ok(mut sender) = spout_clone.try_lock() {
-                sender.send_frame(&frame_buffer, width as u32, height as u32);
-            }
-        }
-    });
+    // 3. Spout2 専用 OS ネイティブ レンダースレッド起動 ("SYNGONIA" 1080p 60fps ロックソリッド送信)
+    // Tokio ワーカースレッドプールから完全分離し、Direct3D 11 スレッド親和性と 0 ジッター送出を保証
+    let spout_controller = spawn_spout_render_thread(
+        "SYNGONIA",
+        1920,
+        1080,
+        Arc::clone(&state_manager),
+    );
 
     // 4. ポート選択: 80 を試行、失敗時は 29117 にフォールバック
     let (listener, port) = bind_listener().await?;
@@ -123,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = AppContext {
         state_manager,
         ws_manager: ws_manager.clone(),
-        spout_sender: Arc::clone(&spout_sender),
+        spout_controller,
         port,
     };
 
@@ -136,6 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/viewer", get(serve_viewer))
         .route("/api/endpoints", get(handle_get_endpoints))
         .route("/api/spout_status", get(handle_get_spout_status))
+        .route("/api/spout_adapter", get(handle_get_spout_adapter).post(handle_set_spout_adapter))
+        .route("/api/test_pattern", get(handle_toggle_test_pattern).post(handle_toggle_test_pattern))
         .nest_service("/static", ServeDir::new(&web_dir))
         .layer(CorsLayer::permissive())
         .with_state(context);
@@ -251,10 +218,66 @@ async fn handle_get_endpoints(
 async fn handle_get_spout_status(
     State(ctx): State<AppContext>,
 ) -> impl IntoResponse {
-    let sender = ctx.spout_sender.lock().await;
+    let is_init = ctx.spout_controller.is_active();
+    let adapter = ctx.spout_controller.get_adapter();
+    let adapter_name = ctx.spout_controller.get_adapter_name();
+    let actual_sender = ctx.spout_controller.actual_name();
     Json(serde_json::json!({
-        "sender_name": sender.name(),
-        "status": sender.status().as_str(),
+        "sender_name": actual_sender,
+        "status": if is_init { "Active" } else { "Standby" },
+        "initialized": is_init,
+        "fps": ctx.spout_controller.fps(),
+        "frame_count": ctx.spout_controller.frame_count(),
+        "adapter_index": adapter,
+        "adapter_name": adapter_name
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct AdapterQuery {
+    index: Option<i32>,
+}
+
+/// GPU アダプター切り替え API (GET: 取得, POST: 切り替え)
+async fn handle_get_spout_adapter(
+    State(ctx): State<AppContext>,
+) -> impl IntoResponse {
+    let adapter = ctx.spout_controller.get_adapter();
+    Json(serde_json::json!({
+        "current_adapter": adapter,
+        "adapters": [
+            { "index": 0, "name": "NVIDIA GeForce RTX 4060 Laptop GPU (High Perf)" },
+            { "index": 1, "name": "Intel(R) Iris(R) Xe Graphics (Integrated)" }
+        ]
+    }))
+}
+
+async fn handle_set_spout_adapter(
+    State(ctx): State<AppContext>,
+    axum::extract::Query(query): axum::extract::Query<AdapterQuery>,
+) -> impl IntoResponse {
+    let target_idx = query.index.unwrap_or(0);
+    ctx.spout_controller.set_adapter(target_idx);
+    Json(serde_json::json!({
+        "success": true,
+        "target_adapter": target_idx,
+        "message": format!("Sent adapter switch command [{target_idx}] to dedicated render thread")
+    }))
+}
+
+/// 現場疎通テストパターントグル API
+async fn handle_toggle_test_pattern(
+    State(ctx): State<AppContext>,
+) -> impl IntoResponse {
+    let current = ctx.state_manager.is_test_pattern();
+    let new_val = !current;
+    ctx.state_manager
+        .update_param("deck-a", None, None, "test_pattern", crate::state::ParamValue::Bool(new_val))
+        .await;
+
+    Json(serde_json::json!({
+        "test_pattern": new_val,
+        "message": if new_val { "Test pattern (SMPTE bars) enabled" } else { "Test pattern disabled" }
     }))
 }
 
