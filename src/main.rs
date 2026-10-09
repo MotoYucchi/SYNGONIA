@@ -70,13 +70,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (audio_engine, audio_rx) = AudioDspEngine::new(64);
     audio_engine.start();
 
-    // 3. Spout2 専用 OS ネイティブ レンダースレッド起動 ("SYNGONIA" 1080p 60fps ロックソリッド送信)
+    // 3. Spout2 専用 OS ネイティブ GPU レンダースレッド起動 ("SYNGONIA" 1080p 60fps ロックソリッド送信)
     // Tokio ワーカースレッドプールから完全分離し、Direct3D 11 スレッド親和性と 0 ジッター送出を保証
     let spout_controller = spawn_spout_render_thread(
         "SYNGONIA",
         1920,
         1080,
         Arc::clone(&state_manager),
+        Arc::clone(&audio_engine.metrics),
     );
 
     // 4. ポート選択: 80 を試行、失敗時は 29117 にフォールバック
@@ -102,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/endpoints", get(handle_get_endpoints))
         .route("/api/spout_status", get(handle_get_spout_status))
         .route("/api/spout_adapter", get(handle_get_spout_adapter).post(handle_set_spout_adapter))
+        .route("/api/spout_effect_mode", get(handle_get_effect_mode).post(handle_set_effect_mode))
         .route("/api/test_pattern", get(handle_toggle_test_pattern).post(handle_toggle_test_pattern))
         .nest_service("/static", ServeDir::new(&web_dir))
         .layer(CorsLayer::permissive())
@@ -229,7 +231,51 @@ async fn handle_get_spout_status(
         "fps": ctx.spout_controller.fps(),
         "frame_count": ctx.spout_controller.frame_count(),
         "adapter_index": adapter,
-        "adapter_name": adapter_name
+        "adapter_name": adapter_name,
+        "effect_mode": ctx.spout_controller.get_effect_mode(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct EffectModeQuery {
+    mode: Option<i32>,
+}
+
+async fn handle_get_effect_mode(
+    State(ctx): State<AppContext>,
+) -> impl IntoResponse {
+    let mode = ctx.spout_controller.get_effect_mode();
+    Json(serde_json::json!({
+        "effect_mode": mode,
+        "modes": [
+            { "id": 0, "name": "SMPTE Test Pattern" },
+            { "id": 1, "name": "3D Cyber Tunnel" },
+            { "id": 2, "name": "Audio Raymarch Core" },
+            { "id": 3, "name": "Neon Wave Grid" },
+            { "id": 4, "name": "Acid Glitch Matrix" },
+            { "id": 5, "name": "4CH Resolume Composite" }
+        ]
+    }))
+}
+
+async fn handle_set_effect_mode(
+    State(ctx): State<AppContext>,
+    axum::extract::Query(query): axum::extract::Query<EffectModeQuery>,
+) -> impl IntoResponse {
+    let mode = query.mode.unwrap_or(5);
+    ctx.spout_controller.set_effect_mode(mode);
+    ctx.state_manager
+        .update_param(
+            "deck-a",
+            None,
+            None,
+            "effect_mode",
+            crate::state::ParamValue::Number(mode as f64),
+        )
+        .await;
+    Json(serde_json::json!({
+        "success": true,
+        "effect_mode": mode
     }))
 }
 

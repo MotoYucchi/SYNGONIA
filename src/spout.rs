@@ -20,6 +20,7 @@ pub const DEFAULT_HEIGHT: u32 = 1080;
 /// レンダー制御コマンド
 pub enum SpoutCommand {
     SetAdapter(i32),
+    SetEffectMode(i32),
     Stop,
 }
 
@@ -27,6 +28,7 @@ pub enum SpoutCommand {
 pub struct SpoutStats {
     pub is_active: AtomicBool,
     pub current_adapter: AtomicI32,
+    pub current_effect_mode: AtomicI32,
     pub adapter_name: std::sync::RwLock<String>,
     pub actual_sender_name: std::sync::RwLock<String>,
     pub fps: AtomicU32,
@@ -50,6 +52,10 @@ impl SpoutController {
         self.stats.current_adapter.load(Ordering::Relaxed)
     }
 
+    pub fn get_effect_mode(&self) -> i32 {
+        self.stats.current_effect_mode.load(Ordering::Relaxed)
+    }
+
     pub fn get_adapter_name(&self) -> String {
         self.stats.adapter_name.read().unwrap().clone()
     }
@@ -60,6 +66,10 @@ impl SpoutController {
 
     pub fn set_adapter(&self, index: i32) {
         let _ = self.cmd_tx.send(SpoutCommand::SetAdapter(index));
+    }
+
+    pub fn set_effect_mode(&self, mode: i32) {
+        let _ = self.cmd_tx.send(SpoutCommand::SetEffectMode(mode));
     }
 
     pub fn fps(&self) -> u32 {
@@ -104,9 +114,33 @@ type FnSpoutGetAdapter = unsafe extern "C" fn(*mut c_void) -> i32;
 type FnSpoutGetAdapterName = unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool;
 type FnSpoutGetSenderName = unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool;
 
+/// HLSL cbuffer (16-byte aligned, 112 bytes total)
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy)]
+pub struct RenderParams {
+    pub time: f32,
+    pub bass: f32,
+    pub mid: f32,
+    pub high: f32,
+
+    pub beat: f32,
+    pub effect_mode: i32,
+    pub blackout: i32,
+    pub pad0: f32,
+
+    pub layer_opacity: [f32; 4],
+    pub layer_color1: [f32; 4],
+    pub layer_color2: [f32; 4],
+    pub layer_color3: [f32; 4],
+    pub layer_color4: [f32; 4],
+}
+
+type FnSpoutRenderShaderFrame = unsafe extern "C" fn(*mut c_void, *const RenderParams) -> bool;
+
 struct SpoutBridge {
     _lib: Library,
     handle: *mut c_void,
+    render_shader_frame: Option<Symbol<'static, FnSpoutRenderShaderFrame>>,
     send_image: Symbol<'static, FnSpoutSendImage>,
     is_initialized: Symbol<'static, FnSpoutIsInitialized>,
     set_adapter: Option<Symbol<'static, FnSpoutSetAdapter>>,
@@ -185,6 +219,7 @@ impl SpoutSender {
             let get_adapter_res: Result<Symbol<FnSpoutGetAdapter>, _> = lib.get(b"Spout_GetAdapter");
             let get_adapter_name_res: Result<Symbol<FnSpoutGetAdapterName>, _> = lib.get(b"Spout_GetAdapterName");
             let get_sender_name_res: Result<Symbol<FnSpoutGetSenderName>, _> = lib.get(b"Spout_GetSenderName");
+            let render_shader_res: Result<Symbol<FnSpoutRenderShaderFrame>, _> = lib.get(b"Spout_RenderShaderFrame");
 
             if let (Ok(init_fn), Ok(send_fn), Ok(is_init_fn), Ok(release_fn)) =
                 (init_fn_res, send_fn_res, is_init_fn_res, release_fn_res)
@@ -201,6 +236,8 @@ impl SpoutSender {
                 let send_image: Symbol<'static, FnSpoutSendImage> = std::mem::transmute(send_fn);
                 let is_initialized: Symbol<'static, FnSpoutIsInitialized> = std::mem::transmute(is_init_fn);
                 let release: Symbol<'static, FnSpoutRelease> = std::mem::transmute(release_fn);
+                let render_shader_frame: Option<Symbol<'static, FnSpoutRenderShaderFrame>> =
+                    render_shader_res.ok().map(|f| std::mem::transmute(f));
                 let set_adapter: Option<Symbol<'static, FnSpoutSetAdapter>> =
                     set_adapter_res.ok().map(|f| std::mem::transmute(f));
                 let get_adapter: Option<Symbol<'static, FnSpoutGetAdapter>> =
@@ -213,6 +250,7 @@ impl SpoutSender {
                 self.bridge = Some(SpoutBridge {
                     _lib: lib,
                     handle,
+                    render_shader_frame,
                     send_image,
                     is_initialized,
                     set_adapter,
@@ -300,6 +338,26 @@ impl SpoutSender {
                     self.status = SpoutStatus::Disconnected;
                     false
                 }
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Direct3D 11 GPU ネイティブ シェーダー描画 & ゼロコピー Spout 送出
+    pub fn render_shader_frame(&mut self, params: &RenderParams) -> bool {
+        if let Some(ref b) = self.bridge {
+            if let Some(ref render_fn) = b.render_shader_frame {
+                let success = unsafe { render_fn(b.handle, params) };
+                if success {
+                    self.status = SpoutStatus::Active;
+                    true
+                } else {
+                    self.status = SpoutStatus::Disconnected;
+                    false
+                }
+            } else {
+                false
             }
         } else {
             false
@@ -440,17 +498,19 @@ pub fn generate_test_pattern(frame_num: u64, width: u32, height: u32) -> Vec<u8>
     pixels
 }
 
-/// 専用 OS ネイティブスレッドで Spout2 送信ループを起動
+/// 専用 OS ネイティブスレッドで Spout2 GPU レンダリングループを起動
 pub fn spawn_spout_render_thread(
     sender_name: &str,
     width: u32,
     height: u32,
     state_manager: Arc<crate::state::StateManager>,
+    audio_metrics: Arc<crate::audio::LiveAudioMetrics>,
 ) -> SpoutController {
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let stats = Arc::new(SpoutStats {
         is_active: AtomicBool::new(false),
         current_adapter: AtomicI32::new(0),
+        current_effect_mode: AtomicI32::new(0),
         adapter_name: std::sync::RwLock::new("Detecting...".to_string()),
         actual_sender_name: std::sync::RwLock::new(sender_name.to_string()),
         fps: AtomicU32::new(0),
@@ -464,7 +524,7 @@ pub fn spawn_spout_render_thread(
         .name("syngonia-spout-render".to_string())
         .spawn(move || {
             tracing::info!(
-                "[SPOUT RENDER THREAD] Starting dedicated DirectX 11 render loop for '{}' ({width}x{height})",
+                "[SPOUT RENDER THREAD] Starting dedicated DirectX 11 GPU Shader render loop for '{}' ({width}x{height})",
                 name_string
             );
 
@@ -480,9 +540,8 @@ pub fn spawn_spout_render_thread(
             thread_stats.is_active.store(sender.is_initialized(), Ordering::Relaxed);
 
             let mut frame_count: u64 = 0;
-            // ゼロアロケーション用 固定バッファ
-            let mut frame_buffer = vec![0u8; (width * height * 4) as usize];
             let target_frame_duration = Duration::from_micros(16_666); // 60.0 fps (16.666 ms)
+            let mut manual_effect_mode: Option<i32> = None;
 
             let mut last_fps_check = Instant::now();
             let mut fps_counter = 0u32;
@@ -499,6 +558,11 @@ pub fn spawn_spout_render_thread(
                             thread_stats.current_adapter.store(sender.get_adapter(), Ordering::Relaxed);
                             *thread_stats.adapter_name.write().unwrap() = sender.get_adapter_name();
                         }
+                        SpoutCommand::SetEffectMode(mode) => {
+                            tracing::info!("[SPOUT RENDER THREAD] Switching Shader Effect Mode to [{mode}]");
+                            manual_effect_mode = Some(mode);
+                            thread_stats.current_effect_mode.store(mode, Ordering::Relaxed);
+                        }
                         SpoutCommand::Stop => {
                             tracing::info!("[SPOUT RENDER THREAD] Received Stop command, exiting loop.");
                             return;
@@ -506,42 +570,51 @@ pub fn spawn_spout_render_thread(
                     }
                 }
 
-                // 2. フラグ取得 (0 ナノ秒 ロックフリー)
+                // 2. 状態とパラメータの取得 (完全ロックフリー & 0 ナノ秒)
                 let is_blackout = state_manager.is_blackout();
+                let is_freeze = state_manager.is_freeze();
                 let is_test_pattern = state_manager.is_test_pattern();
+                let state_effect_mode = state_manager.get_effect_mode();
+                let render_cache = state_manager.get_render_cache();
 
-                frame_count += 1;
-                thread_stats.frame_count.store(frame_count, Ordering::Relaxed);
+                // 3. オーディオ解析データの即時取得 (0 ナノ秒)
+                let bass = audio_metrics.get_low();
+                let mid = audio_metrics.get_mid();
+                let high = audio_metrics.get_high();
+                let beat = audio_metrics.get_beat();
 
-                // 3. ピクセル生成 (ゼロアロケーション) & Direct3D 11 共有テクスチャへ送信
-                if is_blackout {
-                    for pixel in frame_buffer.chunks_exact_mut(4) {
-                        pixel[0] = 0;
-                        pixel[1] = 0;
-                        pixel[2] = 0;
-                        pixel[3] = 255;
-                    }
-                } else if is_test_pattern {
-                    render_test_pattern_inplace(&mut frame_buffer, frame_count, width, height);
-                } else {
-                    // 通常モード: アンビエントパルス (本番エフェクト待機中)
-                    let t = frame_count as f32 * 0.03;
-                    let r = ((t.sin() * 0.5 + 0.5) * 40.0) as u8;
-                    let g = (((t + 2.0).sin() * 0.5 + 0.5) * 30.0) as u8;
-                    let b = (((t + 4.0).sin() * 0.5 + 0.5) * 80.0 + 20.0) as u8;
-                    // BGRA order for DXGI_FORMAT_B8G8R8A8_UNORM
-                    for pixel in frame_buffer.chunks_exact_mut(4) {
-                        pixel[0] = b;
-                        pixel[1] = g;
-                        pixel[2] = r;
-                        pixel[3] = 255;
-                    }
+                if !is_freeze {
+                    frame_count += 1;
+                    thread_stats.frame_count.store(frame_count, Ordering::Relaxed);
                 }
 
-                let sent = sender.send_frame(&frame_buffer, width, height);
+                // 4. エフェクトモード決定 (手動指定があればそれを優先、なければ test_pattern ? 0 : state_effect_mode)
+                let effect_mode = manual_effect_mode.unwrap_or_else(|| {
+                    if is_test_pattern { 0 } else { state_effect_mode }
+                });
+                thread_stats.current_effect_mode.store(effect_mode, Ordering::Relaxed);
+
+                let params = RenderParams {
+                    time: frame_count as f32 * 0.0166667,
+                    bass,
+                    mid,
+                    high,
+                    beat,
+                    effect_mode,
+                    blackout: if is_blackout { 1 } else { 0 },
+                    pad0: 0.0,
+                    layer_opacity: render_cache.opacities,
+                    layer_color1: render_cache.colors[0],
+                    layer_color2: render_cache.colors[1],
+                    layer_color3: render_cache.colors[2],
+                    layer_color4: render_cache.colors[3],
+                };
+
+                // 5. GPU ネイティブ Direct3D 11 シェーダー実行 & ゼロコピー Spout 送出！
+                let sent = sender.render_shader_frame(&params);
                 thread_stats.is_active.store(sent && sender.is_initialized(), Ordering::Relaxed);
 
-                // 4. FPS 計測
+                // 6. FPS 計測
                 fps_counter += 1;
                 if last_fps_check.elapsed() >= Duration::from_secs(1) {
                     thread_stats.fps.store(fps_counter, Ordering::Relaxed);
@@ -549,7 +622,7 @@ pub fn spawn_spout_render_thread(
                     last_fps_check = Instant::now();
                 }
 
-                // 5. 60fps ペーシング（高精度スリープ）
+                // 7. 60fps ペーシング（高精度スリープ）
                 let elapsed = frame_start.elapsed();
                 if elapsed < target_frame_duration {
                     std::thread::sleep(target_frame_duration - elapsed);

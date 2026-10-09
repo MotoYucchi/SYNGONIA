@@ -96,6 +96,8 @@ pub struct MasterState {
     pub freeze: bool,
     /// 現場疎通テストパターン送出モード
     pub test_pattern: bool,
+    /// シェーダーエフェクトモード (0: Test Pattern, 1: Tunnel, 2: Raymarch, 3: Neon Grid, 4: Glitch, 5: 4CH Composite)
+    pub effect_mode: i32,
     /// マスタークロスフェーダー (0.0: Deck A - 1.0: Deck B)
     pub master_xfader: f64,
     /// マスターBPM
@@ -108,6 +110,7 @@ impl Default for MasterState {
             blackout: false,
             freeze: false,
             test_pattern: true, // 起動時は即座に疎通確認できるようテストパターン有効
+            effect_mode: 5,     // 4CH Resolume Composite
             master_xfader: 0.0,
             bpm: 128.0,
         }
@@ -130,77 +133,77 @@ impl Default for SyngoniaState {
         let default_groups = vec![
             GroupDef {
                 id: "group-1".to_string(),
-                name: "CH 1 (Glitch)".to_string(),
+                name: "CH 1 (3D Tunnel)".to_string(),
                 params: {
                     let mut p = HashMap::new();
                     p.insert("opacity".to_string(), ParamValue::Number(100.0));
-                    p.insert("color".to_string(), ParamValue::Text("#ffffff".to_string()));
+                    p.insert("color".to_string(), ParamValue::Text("#00f2fe".to_string()));
                     p.insert("mute".to_string(), ParamValue::Bool(false));
                     p.insert("solo".to_string(), ParamValue::Bool(false));
                     p
                 },
                 layers: vec![LayerDef {
                     id: "layer-1".to_string(),
-                    name: "Glitch Block".to_string(),
-                    layer_type: "effect".to_string(),
-                    url: "effects/effect-cn20-glitch-block.html".to_string(),
+                    name: "3D Cyber Tunnel".to_string(),
+                    layer_type: "shader".to_string(),
+                    url: "shader://cyber-tunnel".to_string(),
                     params: HashMap::new(),
                 }],
             },
             GroupDef {
                 id: "group-2".to_string(),
-                name: "CH 2 (Feedback)".to_string(),
+                name: "CH 2 (Raymarch)".to_string(),
                 params: {
                     let mut p = HashMap::new();
-                    p.insert("opacity".to_string(), ParamValue::Number(50.0));
-                    p.insert("color".to_string(), ParamValue::Text("#ffffff".to_string()));
+                    p.insert("opacity".to_string(), ParamValue::Number(60.0));
+                    p.insert("color".to_string(), ParamValue::Text("#ff007f".to_string()));
                     p.insert("mute".to_string(), ParamValue::Bool(false));
                     p.insert("solo".to_string(), ParamValue::Bool(false));
                     p
                 },
                 layers: vec![LayerDef {
                     id: "layer-2".to_string(),
-                    name: "Feedback Mirror".to_string(),
-                    layer_type: "effect".to_string(),
-                    url: "effects/effect-cn16-feedback-mirror.html".to_string(),
+                    name: "Audio Raymarch Core".to_string(),
+                    layer_type: "shader".to_string(),
+                    url: "shader://raymarch-core".to_string(),
                     params: HashMap::new(),
                 }],
             },
             GroupDef {
                 id: "group-3".to_string(),
-                name: "CH 3 (Prism)".to_string(),
+                name: "CH 3 (Neon Grid)".to_string(),
                 params: {
                     let mut p = HashMap::new();
-                    p.insert("opacity".to_string(), ParamValue::Number(0.0));
-                    p.insert("color".to_string(), ParamValue::Text("#ffffff".to_string()));
+                    p.insert("opacity".to_string(), ParamValue::Number(30.0));
+                    p.insert("color".to_string(), ParamValue::Text("#00ff87".to_string()));
                     p.insert("mute".to_string(), ParamValue::Bool(false));
                     p.insert("solo".to_string(), ParamValue::Bool(false));
                     p
                 },
                 layers: vec![LayerDef {
                     id: "layer-3".to_string(),
-                    name: "Prism Warp".to_string(),
-                    layer_type: "effect".to_string(),
-                    url: "effects/effect-iv01-prism.html".to_string(),
+                    name: "Neon Wave Grid".to_string(),
+                    layer_type: "shader".to_string(),
+                    url: "shader://neon-grid".to_string(),
                     params: HashMap::new(),
                 }],
             },
             GroupDef {
                 id: "group-4".to_string(),
-                name: "CH 4 (Shockwave)".to_string(),
+                name: "CH 4 (Glitch FX)".to_string(),
                 params: {
                     let mut p = HashMap::new();
                     p.insert("opacity".to_string(), ParamValue::Number(0.0));
-                    p.insert("color".to_string(), ParamValue::Text("#ffffff".to_string()));
+                    p.insert("color".to_string(), ParamValue::Text("#ffd700".to_string()));
                     p.insert("mute".to_string(), ParamValue::Bool(false));
                     p.insert("solo".to_string(), ParamValue::Bool(false));
                     p
                 },
                 layers: vec![LayerDef {
                     id: "layer-4".to_string(),
-                    name: "Impact Core".to_string(),
-                    layer_type: "effect".to_string(),
-                    url: "effects/effect-bass11-impact-core.html".to_string(),
+                    name: "Acid Glitch Matrix".to_string(),
+                    layer_type: "shader".to_string(),
+                    url: "shader://acid-glitch".to_string(),
                     params: HashMap::new(),
                 }],
             },
@@ -218,14 +221,53 @@ impl Default for SyngoniaState {
     }
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+/// 16進数カラーコードを RGBA (0.0..1.0) に変換
+pub fn parse_hex_color(hex: &str) -> [f32; 4] {
+    let clean = hex.trim_start_matches('#');
+    if clean.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&clean[0..2], 16),
+            u8::from_str_radix(&clean[2..4], 16),
+            u8::from_str_radix(&clean[4..6], 16),
+        ) {
+            return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+        }
+    }
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+/// レンダースレッド向け 超低遅延パラメータキャッシュ
+#[derive(Debug, Clone)]
+pub struct RenderCache {
+    pub opacities: [f32; 4],
+    pub colors: [[f32; 4]; 4],
+}
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self {
+            opacities: [1.0, 0.5, 0.0, 0.0],
+            colors: [
+                [0.0, 0.9, 1.0, 1.0], // CH1: Cyan
+                [1.0, 0.3, 0.8, 1.0], // CH2: Magenta
+                [0.2, 0.9, 0.4, 1.0], // CH3: Green
+                [1.0, 0.9, 0.1, 1.0], // CH4: Yellow
+            ],
+        }
+    }
+}
+
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 /// 状態管理マネージャー
 pub struct StateManager {
     state: RwLock<SyngoniaState>,
     storage_dir: PathBuf,
     atomic_blackout: AtomicBool,
+    atomic_freeze: AtomicBool,
     atomic_test_pattern: AtomicBool,
+    atomic_effect_mode: AtomicI32,
+    render_cache: std::sync::RwLock<RenderCache>,
 }
 
 impl StateManager {
@@ -235,14 +277,25 @@ impl StateManager {
 
         let initial_state = Self::load_from_disk(&storage_dir).unwrap_or_default();
         let blackout = initial_state.master.blackout;
+        let freeze = initial_state.master.freeze;
         let test_pattern = initial_state.master.test_pattern;
+        let effect_mode = initial_state.master.effect_mode;
 
-        Self {
+        let sm = Self {
             state: RwLock::new(initial_state),
             storage_dir,
             atomic_blackout: AtomicBool::new(blackout),
+            atomic_freeze: AtomicBool::new(freeze),
             atomic_test_pattern: AtomicBool::new(test_pattern),
+            atomic_effect_mode: AtomicI32::new(effect_mode),
+            render_cache: std::sync::RwLock::new(RenderCache::default()),
+        };
+
+        if let Ok(st) = sm.state.try_read() {
+            sm.update_render_cache_internal(&st);
         }
+
+        sm
     }
 
     /// レンダー専用スレッド向け ロックフリー ブラックアウト判定
@@ -250,9 +303,62 @@ impl StateManager {
         self.atomic_blackout.load(Ordering::Relaxed)
     }
 
+    /// レンダー専用スレッド向け ロックフリー フリーズ判定
+    pub fn is_freeze(&self) -> bool {
+        self.atomic_freeze.load(Ordering::Relaxed)
+    }
+
     /// レンダー専用スレッド向け ロックフリー テストパターン判定
     pub fn is_test_pattern(&self) -> bool {
         self.atomic_test_pattern.load(Ordering::Relaxed)
+    }
+
+    /// レンダー専用スレッド向け ロックフリー エフェクトモード取得
+    pub fn get_effect_mode(&self) -> i32 {
+        self.atomic_effect_mode.load(Ordering::Relaxed)
+    }
+
+    /// レンダー専用スレッド向け 同期パラメータ取得 (0.001ms 未満)
+    pub fn get_render_cache(&self) -> RenderCache {
+        self.render_cache.read().unwrap().clone()
+    }
+
+    /// 内部キャッシュ更新 (Solo / Mute / Opacity / Color の合成計算)
+    fn update_render_cache_internal(&self, state: &SyngoniaState) {
+        let mut opacities = [1.0f32, 0.5f32, 0.0f32, 0.0f32];
+        let mut colors = [
+            [0.0f32, 0.9f32, 1.0f32, 1.0f32],
+            [1.0f32, 0.3f32, 0.8f32, 1.0f32],
+            [0.2f32, 0.9f32, 0.4f32, 1.0f32],
+            [1.0f32, 0.9f32, 0.1f32, 1.0f32],
+        ];
+
+        if let Some(groups) = state.decks.get("deck-a") {
+            // いずれかのチャンネルで solo が有効かチェック
+            let has_solo = groups.iter().take(4).any(|grp| {
+                matches!(grp.params.get("solo"), Some(ParamValue::Bool(true)))
+            });
+
+            for (i, grp) in groups.iter().take(4).enumerate() {
+                let is_solo = matches!(grp.params.get("solo"), Some(ParamValue::Bool(true)));
+                let is_mute = matches!(grp.params.get("mute"), Some(ParamValue::Bool(true)));
+
+                if is_mute || (has_solo && !is_solo) {
+                    opacities[i] = 0.0;
+                } else if let Some(ParamValue::Number(op)) = grp.params.get("opacity") {
+                    opacities[i] = (*op as f32 / 100.0).clamp(0.0, 1.0);
+                }
+
+                if let Some(ParamValue::Text(hex)) = grp.params.get("color") {
+                    colors[i] = parse_hex_color(hex);
+                }
+            }
+        }
+
+        if let Ok(mut cache) = self.render_cache.write() {
+            cache.opacities = opacities;
+            cache.colors = colors;
+        }
     }
 
     /// 完全スナップショットの取得（SnapSync用）
@@ -290,12 +396,20 @@ impl StateManager {
             "freeze" => {
                 if let ParamValue::Bool(b) = value {
                     state.master.freeze = b;
+                    self.atomic_freeze.store(b, Ordering::Relaxed);
                 }
             }
             "test_pattern" => {
                 if let ParamValue::Bool(b) = value {
                     state.master.test_pattern = b;
                     self.atomic_test_pattern.store(b, Ordering::Relaxed);
+                }
+            }
+            "effect_mode" => {
+                if let ParamValue::Number(m) = value {
+                    let mode = m as i32;
+                    state.master.effect_mode = mode;
+                    self.atomic_effect_mode.store(mode, Ordering::Relaxed);
                 }
             }
             "player_opacity" => {
@@ -322,6 +436,7 @@ impl StateManager {
             }
         }
 
+        self.update_render_cache_internal(&state);
         seq
     }
 
@@ -330,6 +445,7 @@ impl StateManager {
         let mut state = self.state.write().await;
         state.seq_no += 1;
         state.decks.insert(deck_id.to_string(), groups);
+        self.update_render_cache_internal(&state);
         state.seq_no
     }
 
@@ -344,6 +460,7 @@ impl StateManager {
                     .insert("opacity".to_string(), ParamValue::Number(0.0));
             }
         }
+        self.update_render_cache_internal(&state);
         state.seq_no
     }
 

@@ -7,17 +7,20 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
-      --bg-dark: #07090e;
-      --bg-panel: #111420;
-      --bg-channel: #161b2b;
-      --border-color: #242c44;
+      --bg-dark: #05070c;
+      --bg-panel: #0d111a;
+      --bg-channel: #121724;
+      --border-color: #202738;
+      --border-focus: #3a4766;
       --cyan: #00f2fe;
+      --magenta: #ff007f;
       --neon-green: #00ff87;
-      --accent-purple: #7928ca;
+      --amber: #ffd700;
+      --accent-purple: #8b5cf6;
       --danger-red: #ff0055;
       --warning-yellow: #ffb800;
-      --text-main: #f0f4f8;
-      --text-muted: #8290a5;
+      --text-main: #f1f5f9;
+      --text-muted: #7e8c9f;
     }
 
     * {
@@ -29,7 +32,7 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
       background: var(--bg-dark);
       color: var(--text-main);
       display: flex;
@@ -44,15 +47,15 @@
 
     /* === Header Navigation === */
     header {
-      background: linear-gradient(90deg, #0e121c 0%, #151a28 100%);
-      padding: 8px 16px;
+      background: linear-gradient(90deg, #090c14 0%, #111624 50%, #090c14 100%);
+      padding: 6px 14px;
       border-bottom: 2px solid var(--border-color);
       display: flex;
       justify-content: space-between;
       align-items: center;
       height: 52px;
       flex-shrink: 0;
-      z-index: 10;
+      z-index: 20;
     }
 
     .brand-section {
@@ -72,8 +75,9 @@
     }
 
     .app-badge {
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 800;
+      letter-spacing: 1px;
       color: var(--cyan);
       background: rgba(0, 242, 254, 0.12);
       padding: 2px 6px;
@@ -81,26 +85,73 @@
       border: 1px solid rgba(0, 242, 254, 0.3);
     }
 
-    .status-badge {
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--text-muted);
+    /* Audio Live VU & Beat Indicator */
+    .audio-hud {
       display: flex;
       align-items: center;
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+    }
+
+    .bpm-display {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--cyan);
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .bpm-unit {
+      font-size: 9px;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .beat-leds {
+      display: flex;
       gap: 6px;
+      align-items: center;
     }
 
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--warning-yellow);
-      box-shadow: 0 0 8px var(--warning-yellow);
+    .beat-led {
+      width: 22px;
+      height: 14px;
+      border-radius: 3px;
+      background: #171d2b;
+      border: 1px solid #28334a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      font-weight: 900;
+      color: #4b5870;
+      transition: all 0.05s ease-out;
     }
 
-    .status-dot.connected {
-      background: var(--neon-green);
-      box-shadow: 0 0 10px var(--neon-green);
+    .beat-led.kick.active {
+      background: var(--danger-red);
+      color: #fff;
+      border-color: #fff;
+      box-shadow: 0 0 10px var(--danger-red);
+    }
+
+    .beat-led.mid.active {
+      background: var(--amber);
+      color: #000;
+      border-color: #fff;
+      box-shadow: 0 0 10px var(--amber);
+    }
+
+    .beat-led.high.active {
+      background: var(--cyan);
+      color: #000;
+      border-color: #fff;
+      box-shadow: 0 0 10px var(--cyan);
     }
 
     /* Header Emergency Controls */
@@ -111,19 +162,35 @@
     }
 
     .panic-btn {
-      background: #1a1e2d;
+      background: #141926;
       border: 1px solid var(--border-color);
-      color: #fff;
+      color: var(--text-main);
       font-size: 11px;
       font-weight: 800;
-      letter-spacing: 1px;
-      padding: 6px 14px;
+      letter-spacing: 0.5px;
+      padding: 6px 12px;
       border-radius: 6px;
       cursor: pointer;
       display: flex;
       align-items: center;
       gap: 6px;
-      transition: all 0.15s ease;
+      transition: all 0.12s ease;
+      touch-action: manipulation;
+    }
+
+    .panic-btn:active {
+      transform: scale(0.96);
+    }
+
+    .panic-btn.test-pattern {
+      border-color: rgba(255, 184, 0, 0.4);
+      color: var(--warning-yellow);
+    }
+
+    .panic-btn.test-pattern.active {
+      background: var(--warning-yellow);
+      color: #000;
+      box-shadow: 0 0 14px rgba(255, 184, 0, 0.8);
     }
 
     .panic-btn.blackout {
@@ -134,52 +201,165 @@
     .panic-btn.blackout.active {
       background: var(--danger-red);
       color: #fff;
-      box-shadow: 0 0 15px var(--danger-red);
+      box-shadow: 0 0 16px var(--danger-red);
+      animation: pulse-danger 0.8s infinite alternate;
     }
 
-    .panic-btn.test-pattern.active {
-      background: var(--warning-yellow);
-      color: #000;
-      box-shadow: 0 0 15px var(--warning-yellow);
+    @keyframes pulse-danger {
+      from { box-shadow: 0 0 8px var(--danger-red); }
+      to { box-shadow: 0 0 20px var(--danger-red); }
+    }
+
+    .panic-btn.freeze {
+      border-color: rgba(0, 242, 254, 0.4);
+      color: var(--cyan);
     }
 
     .panic-btn.freeze.active {
       background: var(--cyan);
       color: #000;
-      box-shadow: 0 0 15px var(--cyan);
+      box-shadow: 0 0 14px var(--cyan);
+    }
+
+    .panic-btn.fxkill {
+      border-color: rgba(255, 87, 34, 0.4);
+      color: #ff7043;
     }
 
     .panic-btn.fxkill:active {
       background: #ff5722;
       color: #fff;
+      box-shadow: 0 0 14px #ff5722;
+    }
+
+    /* === Effect Palette Sub-Bar === */
+    #effect-palette-bar {
+      background: #0a0d15;
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      flex-shrink: 0;
+      z-index: 15;
+    }
+
+    .palette-label {
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      margin-right: 4px;
+      white-space: nowrap;
+    }
+
+    .fx-mode-btn {
+      background: #121724;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 800;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+
+    .fx-mode-btn:active {
+      transform: scale(0.96);
+    }
+
+    .fx-mode-btn.active {
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .fx-mode-btn[data-mode="0"].active {
+      background: var(--warning-yellow);
+      color: #000;
+      border-color: var(--warning-yellow);
+      box-shadow: 0 0 10px rgba(255, 184, 0, 0.5);
+    }
+
+    .fx-mode-btn[data-mode="1"].active {
+      background: var(--cyan);
+      color: #000;
+      border-color: var(--cyan);
+      box-shadow: 0 0 10px rgba(0, 242, 254, 0.5);
+    }
+
+    .fx-mode-btn[data-mode="2"].active {
+      background: var(--magenta);
+      color: #fff;
+      border-color: var(--magenta);
+      box-shadow: 0 0 10px rgba(255, 0, 127, 0.5);
+    }
+
+    .fx-mode-btn[data-mode="3"].active {
+      background: var(--neon-green);
+      color: #000;
+      border-color: var(--neon-green);
+      box-shadow: 0 0 10px rgba(0, 255, 135, 0.5);
+    }
+
+    .fx-mode-btn[data-mode="4"].active {
+      background: var(--amber);
+      color: #000;
+      border-color: var(--amber);
+      box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+    }
+
+    .fx-mode-btn[data-mode="5"].active {
+      background: linear-gradient(135deg, var(--accent-purple) 0%, #3b82f6 100%);
+      color: #fff;
+      border-color: var(--cyan);
+      box-shadow: 0 0 14px rgba(139, 92, 246, 0.6);
     }
 
     /* === Mixer Container === */
     #mixer-container {
       flex: 1;
       display: grid;
-      grid-template-rows: repeat(var(--fader-rows, 1), 1fr);
+      grid-template-rows: 1fr;
       grid-auto-flow: column;
-      grid-auto-columns: 140px;
+      grid-auto-columns: minmax(130px, 1fr);
       gap: 12px;
-      padding: 14px;
+      padding: 12px;
       overflow-x: auto;
       overflow-y: hidden;
       align-items: stretch;
-      background: radial-gradient(circle at 50% 10%, #111524 0%, #07090e 80%);
+      background: radial-gradient(circle at 50% 15%, #0f1422 0%, #05070c 80%);
     }
 
     /* Channel Strip */
     .mixer-channel {
       background: var(--bg-channel);
       border: 1px solid var(--border-color);
-      border-radius: 10px;
+      border-radius: 12px;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 10px;
+      padding: 10px 8px;
       min-height: 0;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+      position: relative;
+    }
+
+    .mixer-channel::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 12px;
+      right: 12px;
+      height: 3px;
+      border-radius: 0 0 3px 3px;
+      background: var(--ch-theme, var(--cyan));
+      box-shadow: 0 0 8px var(--ch-theme, var(--cyan));
     }
 
     .channel-header {
@@ -191,15 +371,28 @@
       margin-bottom: 8px;
     }
 
+    .channel-title-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .channel-icon {
+      font-size: 11px;
+      color: var(--ch-theme, var(--cyan));
+    }
+
     .channel-title {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
       color: #fff;
-      text-align: center;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      width: 100%;
+      text-align: center;
+      letter-spacing: 0.5px;
     }
 
     /* Mute & Solo Buttons */
@@ -211,30 +404,36 @@
     }
 
     .macro-btn {
-      background: #0f131f;
+      background: #0b0f19;
       border: 1px solid var(--border-color);
       color: var(--text-muted);
       font-size: 11px;
-      font-weight: 800;
-      padding: 4px 0;
-      border-radius: 4px;
+      font-weight: 900;
+      padding: 6px 0;
+      border-radius: 6px;
       cursor: pointer;
       text-align: center;
-      transition: all 0.15s;
+      transition: all 0.12s;
+      touch-action: manipulation;
+    }
+
+    .macro-btn:active {
+      transform: scale(0.96);
     }
 
     .macro-btn.mute.active {
       background: var(--danger-red);
       color: #fff;
       border-color: var(--danger-red);
-      box-shadow: 0 0 8px rgba(255, 0, 85, 0.6);
+      box-shadow: 0 0 10px rgba(255, 0, 85, 0.7);
     }
 
     .macro-btn.solo.active {
       background: var(--warning-yellow);
       color: #000;
       border-color: var(--warning-yellow);
-      box-shadow: 0 0 8px rgba(255, 184, 0, 0.6);
+      box-shadow: 0 0 12px rgba(255, 184, 0, 0.8);
+      font-weight: 900;
     }
 
     /* Fader Section */
@@ -244,9 +443,9 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      gap: 16px;
+      gap: 12px;
       min-height: 0;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
 
     .fader-col {
@@ -254,13 +453,15 @@
       flex-direction: column;
       align-items: center;
       height: 100%;
+      position: relative;
     }
 
-    .fader-label {
-      font-size: 10px;
-      font-weight: 800;
-      color: var(--text-muted);
-      margin-bottom: 6px;
+    .fader-value-label {
+      font-size: 11px;
+      font-weight: 900;
+      color: var(--cyan);
+      margin-bottom: 4px;
+      font-variant-numeric: tabular-nums;
     }
 
     /* Vertical Sliders (Pointer-Protected) */
@@ -276,43 +477,43 @@
 
     /* Ultra-Large Opacity Fader */
     input[type=range].opacity-fader {
-      width: 52px;
+      width: 54px;
       flex: 1;
-      background: #090c13;
-      border: 2px solid #232c42;
-      border-radius: 26px;
-      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
+      background: #070a12;
+      border: 2px solid #202738;
+      border-radius: 27px;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.9);
     }
 
     input[type=range].opacity-fader::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 78px;
+      width: 76px;
       height: 48px;
-      background: linear-gradient(135deg, var(--cyan) 0%, #00a8ff 100%);
+      background: linear-gradient(135deg, var(--ch-theme, var(--cyan)) 0%, #1e3a8a 100%);
       border: 3px solid #ffffff;
       border-radius: 8px;
-      box-shadow: 0 0 14px rgba(0, 242, 254, 0.6), 0 4px 8px rgba(0, 0, 0, 0.8);
+      box-shadow: 0 0 14px var(--ch-theme, var(--cyan)), 0 4px 10px rgba(0, 0, 0, 0.9);
       cursor: grab;
     }
 
     input[type=range].opacity-fader:active::-webkit-slider-thumb {
       cursor: grabbing;
       background: #ffffff;
-      border-color: var(--cyan);
+      border-color: var(--ch-theme, var(--cyan));
     }
 
     /* Hue Fader */
     input[type=range].hue-fader {
-      width: 28px;
+      width: 26px;
       flex: 1;
       background: linear-gradient(to top, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%);
-      border: 2px solid #232c42;
-      border-radius: 14px;
+      border: 2px solid #202738;
+      border-radius: 13px;
     }
 
     input[type=range].hue-fader::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 48px;
+      width: 44px;
       height: 22px;
       background: rgba(255, 255, 255, 0.95);
       border: 2px solid #000;
@@ -327,19 +528,26 @@
       gap: 6px;
       width: 100%;
       justify-content: center;
+      align-items: center;
     }
 
     .color-btn {
       width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      border: 2px solid #3d4a66;
+      height: 30px;
+      border-radius: 6px;
+      border: 1px solid #2d374e;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 11px;
       font-weight: 900;
+      touch-action: manipulation;
+      transition: all 0.12s;
+    }
+
+    .color-btn:active {
+      transform: scale(0.94);
     }
 
     .color-btn.white {
@@ -359,8 +567,47 @@
 
     /* Master Channel Strip (Rightmost) */
     .master-channel {
-      background: #1b1928;
-      border-color: rgba(121, 40, 202, 0.5);
+      background: #141224;
+      border-color: rgba(139, 92, 246, 0.5);
+    }
+
+    .master-channel::before {
+      background: var(--accent-purple);
+      box-shadow: 0 0 10px var(--accent-purple);
+    }
+
+    /* Footer Status Bar */
+    footer {
+      background: #080a11;
+      border-top: 1px solid var(--border-color);
+      padding: 4px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      color: var(--text-muted);
+      height: 28px;
+      flex-shrink: 0;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warning-yellow);
+      box-shadow: 0 0 8px var(--warning-yellow);
+    }
+
+    .status-dot.connected {
+      background: var(--neon-green);
+      box-shadow: 0 0 10px var(--neon-green);
     }
   </style>
 </head>
@@ -373,16 +620,24 @@
         <i class="fas fa-bolt" style="color: var(--cyan);"></i> SYNGONIA
       </div>
       <span class="app-badge">TOUCH MIXER EX</span>
-      <div class="status-badge">
-        <span id="status-dot" class="status-dot"></span>
-        <span id="status-text">Connecting...</span>
+      
+      <!-- Live Audio Indicators -->
+      <div class="audio-hud">
+        <div class="bpm-display">
+          <span id="bpm-val">128</span><span class="bpm-unit">BPM</span>
+        </div>
+        <div class="beat-leds">
+          <div id="led-kick" class="beat-led kick">K</div>
+          <div id="led-mid" class="beat-led mid">M</div>
+          <div id="led-high" class="beat-led high">H</div>
+        </div>
       </div>
     </div>
 
     <!-- Emergency & Panics -->
     <div class="header-controls">
-      <button type="button" id="btn-test-pattern" class="panic-btn test-pattern active" onclick="toggleTestPattern()" style="border-color: rgba(255, 184, 0, 0.6); color: var(--warning-yellow);">
-        <i class="fas fa-barcode"></i> TEST PATTERN
+      <button type="button" id="btn-test-pattern" class="panic-btn test-pattern" onclick="toggleTestPattern()">
+        <i class="fas fa-barcode"></i> TEST
       </button>
       <button type="button" id="btn-blackout" class="panic-btn blackout" onclick="toggleBlackout()">
         <i class="fas fa-eye-slash"></i> BLACKOUT
@@ -396,10 +651,42 @@
     </div>
   </header>
 
+  <!-- Effect Palette Bar -->
+  <div id="effect-palette-bar">
+    <span class="palette-label"><i class="fas fa-wand-magic-sparkles"></i> FX MODE:</span>
+    <button type="button" class="fx-mode-btn" data-mode="0" onclick="setEffectMode(0)">
+      <i class="fas fa-barcode"></i> SMPTE TEST
+    </button>
+    <button type="button" class="fx-mode-btn" data-mode="1" onclick="setEffectMode(1)">
+      <i class="fas fa-circle-notch"></i> 3D TUNNEL
+    </button>
+    <button type="button" class="fx-mode-btn" data-mode="2" onclick="setEffectMode(2)">
+      <i class="fas fa-atom"></i> RAYMARCH
+    </button>
+    <button type="button" class="fx-mode-btn" data-mode="3" onclick="setEffectMode(3)">
+      <i class="fas fa-border-all"></i> NEON GRID
+    </button>
+    <button type="button" class="fx-mode-btn" data-mode="4" onclick="setEffectMode(4)">
+      <i class="fas fa-bolt"></i> GLITCH
+    </button>
+    <button type="button" class="fx-mode-btn active" data-mode="5" onclick="setEffectMode(5)">
+      <i class="fas fa-layer-group"></i> 4CH COMPOSITE
+    </button>
+  </div>
+
   <!-- Channels Container -->
   <main id="mixer-container">
     <!-- Dynamic Channels generated by JS -->
   </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="status-indicator">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">CONNECTING...</span>
+    </div>
+    <div id="diag-info">SPOUT2 1080p 60fps ZERO-COPY DIRECT3D 11</div>
+  </footer>
 
   <script>
     // === SYNGONIA Touch Protocol & Anti-Jitter Engine ===
@@ -410,10 +697,23 @@
     let isBlackout = false;
     let isFreeze = false;
     let isTestPattern = true;
+    let currentEffectMode = 5;
 
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
     const mixerContainer = document.getElementById('mixer-container');
+    const bpmVal = document.getElementById('bpm-val');
+    const ledKick = document.getElementById('led-kick');
+    const ledMid = document.getElementById('led-mid');
+    const ledHigh = document.getElementById('led-high');
+
+    // チャンネル専用メタデータ
+    const CHANNEL_META = [
+      { name: 'CH 1 (TUNNEL)', icon: 'fa-circle-notch', color: '#00f2fe' },
+      { name: 'CH 2 (RAYMARCH)', icon: 'fa-atom', color: '#ff007f' },
+      { name: 'CH 3 (NEON GRID)', icon: 'fa-border-all', color: '#00ff87' },
+      { name: 'CH 4 (GLITCH FX)', icon: 'fa-bolt', color: '#ffd700' }
+    ];
 
     // === 荒ぶるフェーダー保護 (Pointer Down Lock) ===
     document.addEventListener('pointerdown', e => {
@@ -432,21 +732,21 @@
     function connectWs() {
       const loc = window.location;
       const wsUri = (loc.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + loc.host + '/ws';
-      statusText.textContent = 'Connecting...';
+      statusText.textContent = 'CONNECTING...';
       statusDot.className = 'status-dot';
 
       ws = new WebSocket(wsUri);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        statusText.textContent = 'ONLINE (Synced)';
+        statusText.textContent = 'ONLINE (60fps Synced)';
         statusDot.className = 'status-dot connected';
         // 接続直後に SnapSync 要求
         sendWs({ type: 'request_sync', client_id: CLIENT_ID });
       };
 
       ws.onclose = () => {
-        statusText.textContent = 'OFFLINE (Reconnecting)';
+        statusText.textContent = 'OFFLINE (Reconnecting...)';
         statusDot.className = 'status-dot';
         setTimeout(connectWs, 1000);
       };
@@ -458,6 +758,9 @@
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
           handleIncomingJson(JSON.parse(event.data));
+        } else if (event.data instanceof ArrayBuffer) {
+          // 512band FFT オーディオバイナリ処理
+          handleIncomingAudio(new Uint8Array(event.data));
         }
       };
     }
@@ -466,6 +769,42 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         payload.client_id = CLIENT_ID;
         ws.send(JSON.stringify(payload));
+      }
+    }
+
+    // === Audio Reactive LED & VU Meter ===
+    let lastKickTime = 0;
+    function handleIncomingAudio(bytes) {
+      if (!bytes || bytes.length < 64) return;
+      
+      // Low (Kick: 0..7)
+      let low = 0;
+      for (let i = 0; i < 8; i++) low += bytes[i];
+      low /= 8;
+
+      // Mid (Snare: 8..32)
+      let mid = 0;
+      for (let i = 8; i < 32; i++) mid += bytes[i];
+      mid /= 24;
+
+      // High (HiHat: 33..128)
+      let high = 0;
+      for (let i = 33; i < 128; i++) high += bytes[i];
+      high /= 95;
+
+      const now = performance.now();
+      if (low > 40 && (now - lastKickTime > 120)) {
+        ledKick.classList.add('active');
+        lastKickTime = now;
+        setTimeout(() => ledKick.classList.remove('active'), 90);
+      }
+      if (mid > 35) {
+        ledMid.classList.add('active');
+        setTimeout(() => ledMid.classList.remove('active'), 70);
+      }
+      if (high > 30) {
+        ledHigh.classList.add('active');
+        setTimeout(() => ledHigh.classList.remove('active'), 50);
       }
     }
 
@@ -480,9 +819,16 @@
           renderChannels();
         }
         if (msg.state && msg.state.master) {
-          isBlackout = msg.state.master.blackout;
-          isFreeze = msg.state.master.freeze;
+          isBlackout = !!msg.state.master.blackout;
+          isFreeze = !!msg.state.master.freeze;
           isTestPattern = msg.state.master.test_pattern !== false;
+          if (typeof msg.state.master.effect_mode === 'number') {
+            currentEffectMode = msg.state.master.effect_mode;
+            updateEffectModeUi();
+          }
+          if (typeof msg.state.master.bpm === 'number') {
+            bpmVal.textContent = Math.round(msg.state.master.bpm);
+          }
           updatePanicUi();
         }
       } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
@@ -503,8 +849,30 @@
     }
 
     function applyParamUpdate(groupId, layerId, paramId, value) {
+      if (paramId === 'effect_mode') {
+        currentEffectMode = parseInt(value);
+        updateEffectModeUi();
+        return;
+      }
+      if (paramId === 'blackout') {
+        isBlackout = !!value;
+        updatePanicUi();
+        return;
+      }
+      if (paramId === 'freeze') {
+        isFreeze = !!value;
+        updatePanicUi();
+        return;
+      }
+      if (paramId === 'test_pattern') {
+        isTestPattern = !!value;
+        updatePanicUi();
+        return;
+      }
+
       if (!layerId && groupId) {
         const opFader = document.querySelector(`.opacity-fader[data-group="${groupId}"]`);
+        const opValLabel = document.querySelector(`.fader-value-label[data-group="${groupId}"]`);
         const hueFader = document.querySelector(`.hue-fader[data-group="${groupId}"]`);
         const muteBtn = document.querySelector(`.macro-btn.mute[data-group="${groupId}"]`);
         const soloBtn = document.querySelector(`.macro-btn.solo[data-group="${groupId}"]`);
@@ -512,6 +880,7 @@
         // ドラッグ中でない場合のみUI更新
         if (paramId === 'opacity' && opFader && opFader.dataset.dragging !== "true") {
           opFader.value = value;
+          if (opValLabel) opValLabel.textContent = Math.round(value) + '%';
         } else if (paramId === 'color' && hueFader && hueFader.dataset.dragging !== "true") {
           hueFader.value = hexToHue(value);
         } else if (paramId === 'mute' && muteBtn) {
@@ -533,17 +902,27 @@
     function renderChannels() {
       mixerContainer.innerHTML = '';
       currentDeck.forEach((group, index) => {
+        const meta = CHANNEL_META[index] || {
+          name: group.name || 'CH ' + (index + 1),
+          icon: 'fa-sliders',
+          color: '#00f2fe'
+        };
+
         const opVal = (group.params && typeof group.params.opacity === 'number') ? group.params.opacity : 100;
-        const colVal = (group.params && typeof group.params.color === 'string') ? group.params.color : '#ffffff';
+        const colVal = (group.params && typeof group.params.color === 'string') ? group.params.color : meta.color;
         const isMute = !!(group.params && group.params.mute);
         const isSolo = !!(group.params && group.params.solo);
         const hueVal = hexToHue(colVal);
 
         const ch = document.createElement('div');
         ch.className = 'mixer-channel';
+        ch.style.setProperty('--ch-theme', meta.color);
         ch.innerHTML = `
           <div class="channel-header">
-            <span class="channel-title">${group.name || 'CH ' + (index + 1)}</span>
+            <div class="channel-title-row">
+              <i class="fas ${meta.icon} channel-icon"></i>
+              <span class="channel-title">${meta.name}</span>
+            </div>
             <div class="macro-btns">
               <button type="button" class="macro-btn mute ${isMute ? 'active' : ''}" data-group="${group.id}" onclick="toggleMute('${group.id}')">MUTE</button>
               <button type="button" class="macro-btn solo ${isSolo ? 'active' : ''}" data-group="${group.id}" onclick="toggleSolo('${group.id}')">SOLO</button>
@@ -552,12 +931,12 @@
 
           <div class="fader-section">
             <div class="fader-col">
-              <span class="fader-label">OPAC</span>
+              <span class="fader-value-label" data-group="${group.id}">${Math.round(opVal)}%</span>
               <input type="range" class="v-fader opacity-fader" data-group="${group.id}" min="0" max="100" step="1" value="${opVal}"
                      oninput="onOpacityInput('${group.id}', this.value)" aria-label="Opacity">
             </div>
             <div class="fader-col">
-              <span class="fader-label">HUE</span>
+              <span class="fader-value-label" style="color: var(--text-muted); font-size: 9px;">HUE</span>
               <input type="range" class="v-fader hue-fader" data-group="${group.id}" min="0" max="360" step="1" value="${hueVal}"
                      oninput="onHueInput('${group.id}', this.value)" aria-label="Hue">
             </div>
@@ -566,27 +945,34 @@
           <div class="color-actions">
             <button type="button" class="color-btn white ${colVal.toLowerCase() === '#ffffff' ? 'active' : ''}" onclick="setWhite('${group.id}')">W</button>
             <button type="button" class="color-btn black ${colVal.toLowerCase() === '#000000' ? 'active' : ''}" onclick="setBlack('${group.id}')">B</button>
+            <button type="button" class="color-btn" style="background: ${meta.color}; color: #000;" onclick="setDefaultColor('${group.id}', '${meta.color}')">
+              <i class="fas fa-rotate-left" style="font-size: 9px;"></i>
+            </button>
           </div>
         `;
         mixerContainer.appendChild(ch);
       });
 
-      // Master Crossfader Strip
+      // Master Crossfader Strip (Rightmost)
       const masterCh = document.createElement('div');
       masterCh.className = 'mixer-channel master-channel';
       masterCh.innerHTML = `
         <div class="channel-header">
-          <span class="channel-title" style="color: var(--cyan);">MASTER</span>
-          <span style="font-size: 10px; color: var(--text-muted);">CROSSFADER</span>
+          <div class="channel-title-row">
+            <i class="fas fa-crown" style="color: var(--accent-purple); font-size: 11px;"></i>
+            <span class="channel-title" style="color: var(--accent-purple);">MASTER</span>
+          </div>
+          <span style="font-size: 10px; font-weight: 700; color: var(--text-muted);">CROSSFADER</span>
         </div>
         <div class="fader-section">
           <div class="fader-col" style="width: 100%;">
-            <input type="range" class="v-fader opacity-fader" style="width: 60px;" min="0" max="1" step="0.01" value="0"
+            <span class="fader-value-label" id="master-val-label" style="color: var(--accent-purple);">0.0</span>
+            <input type="range" class="v-fader opacity-fader" style="width: 60px; --ch-theme: var(--accent-purple);" min="0" max="1" step="0.01" value="0"
                    oninput="onMasterXfaderInput(this.value)" aria-label="Crossfader">
           </div>
         </div>
         <div class="color-actions">
-          <span style="font-size: 11px; font-weight: 800; color: var(--cyan);">DECK A ⇄ B</span>
+          <span style="font-size: 10px; font-weight: 900; color: var(--accent-purple); letter-spacing: 0.5px;">DECK A ⇄ B</span>
         </div>
       `;
       mixerContainer.appendChild(masterCh);
@@ -594,6 +980,8 @@
 
     // === Parameter Dispatches ===
     window.onOpacityInput = (groupId, val) => {
+      const label = document.querySelector(`.fader-value-label[data-group="${groupId}"]`);
+      if (label) label.textContent = Math.round(val) + '%';
       sendParam(groupId, 'opacity', parseFloat(val));
     };
 
@@ -612,19 +1000,39 @@
       sendParam(groupId, 'color', '#000000');
     };
 
+    window.setDefaultColor = (groupId, hex) => {
+      sendParam(groupId, 'color', hex);
+      const hueFader = document.querySelector(`.hue-fader[data-group="${groupId}"]`);
+      if (hueFader) hueFader.value = hexToHue(hex);
+    };
+
     window.toggleMute = (groupId) => {
       const g = currentDeck.find(grp => grp.id === groupId);
       const isMute = !(g && g.params && g.params.mute);
+      if (g) {
+        if (!g.params) g.params = {};
+        g.params.mute = isMute;
+      }
+      const btn = document.querySelector(`.macro-btn.mute[data-group="${groupId}"]`);
+      if (btn) btn.classList.toggle('active', isMute);
       sendParam(groupId, 'mute', isMute);
     };
 
     window.toggleSolo = (groupId) => {
       const g = currentDeck.find(grp => grp.id === groupId);
       const isSolo = !(g && g.params && g.params.solo);
+      if (g) {
+        if (!g.params) g.params = {};
+        g.params.solo = isSolo;
+      }
+      const btn = document.querySelector(`.macro-btn.solo[data-group="${groupId}"]`);
+      if (btn) btn.classList.toggle('active', isSolo);
       sendParam(groupId, 'solo', isSolo);
     };
 
     window.onMasterXfaderInput = (val) => {
+      const label = document.getElementById('master-val-label');
+      if (label) label.textContent = parseFloat(val).toFixed(2);
       sendWs({
         type: 'param_update',
         deckId: deckId,
@@ -643,6 +1051,28 @@
         layerId: null,
         paramId: paramId,
         value: value,
+      });
+    }
+
+    // === Effect Mode Selector ===
+    window.setEffectMode = (mode) => {
+      currentEffectMode = mode;
+      updateEffectModeUi();
+      fetch(`/api/spout_effect_mode?mode=${mode}`, { method: 'POST' }).catch(() => {});
+      sendWs({
+        type: 'param_update',
+        deckId: deckId,
+        groupId: null,
+        layerId: null,
+        paramId: 'effect_mode',
+        value: mode,
+      });
+    };
+
+    function updateEffectModeUi() {
+      document.querySelectorAll('.fx-mode-btn').forEach(btn => {
+        const m = parseInt(btn.dataset.mode);
+        btn.classList.toggle('active', m === currentEffectMode);
       });
     }
 
@@ -667,13 +1097,19 @@
 
     window.triggerFxKill = () => {
       sendWs({ type: 'panic_action', action: 'fx_kill', value: true });
+      currentDeck.forEach(g => {
+        if (g.params) g.params.opacity = 0;
+      });
+      renderChannels();
     };
 
     function updatePanicUi() {
       const tpBtn = document.getElementById('btn-test-pattern');
       if (tpBtn) tpBtn.classList.toggle('active', isTestPattern);
-      document.getElementById('btn-blackout').classList.toggle('active', isBlackout);
-      document.getElementById('btn-freeze').classList.toggle('active', isFreeze);
+      const boBtn = document.getElementById('btn-blackout');
+      if (boBtn) boBtn.classList.toggle('active', isBlackout);
+      const fzBtn = document.getElementById('btn-freeze');
+      if (fzBtn) fzBtn.classList.toggle('active', isFreeze);
     }
 
     // Helpers

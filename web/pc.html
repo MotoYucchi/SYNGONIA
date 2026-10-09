@@ -103,6 +103,50 @@
       box-shadow: 0 0 16px var(--amber);
     }
 
+    .tips-toggle-btn.blackout-active {
+      background: var(--danger-red) !important;
+      color: #fff !important;
+      border-color: var(--danger-red) !important;
+      box-shadow: 0 0 16px var(--danger-red) !important;
+    }
+
+    .tips-toggle-btn.freeze-active {
+      background: var(--cyan) !important;
+      color: #000 !important;
+      border-color: var(--cyan) !important;
+      box-shadow: 0 0 16px var(--cyan) !important;
+    }
+
+    .mini-btn {
+      background: #10141f;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 800;
+      padding: 3px 7px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .mini-btn:hover {
+      border-color: #4b587a;
+    }
+
+    .mini-btn.mute.active {
+      background: var(--danger-red);
+      color: #fff;
+      border-color: var(--danger-red);
+      box-shadow: 0 0 8px rgba(255, 0, 85, 0.7);
+    }
+
+    .mini-btn.solo.active {
+      background: var(--amber);
+      color: #000;
+      border-color: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 184, 0, 0.8);
+    }
+
     /* === Main Work Area === */
     .main-layout {
       flex: 1;
@@ -302,7 +346,16 @@
 
     <div class="header-actions">
       <button type="button" id="btn-test-pattern" class="tips-toggle-btn active" onclick="toggleTestPattern()" style="border-color: var(--amber); color: var(--amber);">
-        <i class="fas fa-barcode"></i> TEST PATTERN
+        <i class="fas fa-barcode"></i> TEST <span style="font-size: 9px; opacity: 0.7;">[T]</span>
+      </button>
+      <button type="button" id="btn-blackout" class="tips-toggle-btn" onclick="toggleBlackout()" style="border-color: var(--danger-red); color: var(--danger-red);">
+        <i class="fas fa-eye-slash"></i> BLACKOUT <span style="font-size: 9px; opacity: 0.7;">[Space]</span>
+      </button>
+      <button type="button" id="btn-freeze" class="tips-toggle-btn" onclick="toggleFreeze()" style="border-color: var(--cyan); color: var(--cyan);">
+        <i class="fas fa-snowflake"></i> FREEZE <span style="font-size: 9px; opacity: 0.7;">[F]</span>
+      </button>
+      <button type="button" id="btn-fxkill" class="tips-toggle-btn" onclick="triggerFxKill()" style="border-color: #ff5722; color: #ff5722;">
+        <i class="fas fa-trash-can"></i> FX KILL <span style="font-size: 9px; opacity: 0.7;">[K]</span>
       </button>
       <button type="button" class="tips-toggle-btn" onclick="toggleTipsDrawer()">
         <i class="fas fa-lightbulb"></i> 現場 TIPS & 接続
@@ -372,6 +425,22 @@
             ※OBSで映像が黒い場合、OBSと同一のGPUを選択してください。
           </p>
         </div>
+
+        <!-- GPU Direct3D 11 Shader Mode Selector -->
+        <div style="margin-top: 10px; padding: 10px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span class="hud-label">GPU SHADER FX MODE</span>
+            <span id="hud-shader-mode" style="font-size: 11px; font-weight: 800; color: var(--neon-green);">4CH COMPOSITE</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;">
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(5)">⚡ 4CH COMPOSITE</button>
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(1)">🌀 3D TUNNEL</button>
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(2)">🔮 RAYMARCH</button>
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(3)">🌆 NEON GRID</button>
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(4)">💥 ACID GLITCH</button>
+            <button type="button" class="tips-toggle-btn" style="padding: 4px; font-size: 10px; justify-content: center;" onclick="setShaderMode(0)">📺 TEST PATTERN</button>
+          </div>
+        </div>
       </div>
 
       <!-- 3. 緊急ショートカット集 -->
@@ -426,6 +495,10 @@
       }
     }
 
+    let isBlackout = false;
+    let isFreeze = false;
+    let isTestPattern = true;
+
     function handleIncomingJson(msg) {
       if (msg.client_id === CLIENT_ID) return; // エコーバック破棄
 
@@ -435,23 +508,53 @@
           renderChannels();
         }
         if (msg.state && msg.state.master) {
+          isBlackout = !!msg.state.master.blackout;
+          isFreeze = !!msg.state.master.freeze;
           isTestPattern = msg.state.master.test_pattern !== false;
-          updateTestPatternUi();
+          updatePanicUi();
         }
       } else if (msg.type === 'rebuild_layers' && msg.deckId === deckId) {
         currentDeck = msg.layers;
         renderChannels();
       } else if (msg.type === 'panic_action') {
-        if (msg.action === 'test_pattern') {
-          isTestPattern = !!msg.value;
-          updateTestPatternUi();
+        if (msg.action === 'blackout') isBlackout = !!msg.value;
+        if (msg.action === 'freeze') isFreeze = !!msg.value;
+        if (msg.action === 'test_pattern') isTestPattern = !!msg.value;
+        if (msg.action === 'fx_kill') {
+          currentDeck.forEach(g => { if (g.params) g.params.opacity = 0; });
+          renderChannels();
         }
+        updatePanicUi();
       } else if (msg.type === 'param_update' && msg.deckId === deckId) {
+        if (msg.paramId === 'blackout') {
+          isBlackout = !!msg.value;
+          updatePanicUi();
+          return;
+        }
+        if (msg.paramId === 'freeze') {
+          isFreeze = !!msg.value;
+          updatePanicUi();
+          return;
+        }
+        if (msg.paramId === 'test_pattern') {
+          isTestPattern = !!msg.value;
+          updatePanicUi();
+          return;
+        }
+
         const slider = document.querySelector(`.h-slider[data-group="${msg.groupId}"][data-param="${msg.paramId}"]`);
         if (slider && slider.dataset.dragging !== "true") {
           slider.value = msg.value;
           const valDisplay = slider.parentElement.querySelector('.val-text');
           if (valDisplay) valDisplay.textContent = Math.round(msg.value) + '%';
+        }
+        const muteBtn = document.querySelector(`.mini-btn.mute[data-group="${msg.groupId}"]`);
+        if (msg.paramId === 'mute' && muteBtn) {
+          muteBtn.classList.toggle('active', !!msg.value);
+        }
+        const soloBtn = document.querySelector(`.mini-btn.solo[data-group="${msg.groupId}"]`);
+        if (msg.paramId === 'solo' && soloBtn) {
+          soloBtn.classList.toggle('active', !!msg.value);
         }
       }
     }
@@ -460,14 +563,21 @@
       channelsContainer.innerHTML = '';
       currentDeck.forEach((group, idx) => {
         const opVal = (group.params && typeof group.params.opacity === 'number') ? group.params.opacity : 100;
-        const colVal = (group.params && typeof group.params.color === 'string') ? group.params.color : '#ffffff';
+        const isMute = !!(group.params && group.params.mute);
+        const isSolo = !!(group.params && group.params.solo);
 
         const card = document.createElement('div');
         card.className = 'channel-card';
         card.innerHTML = `
           <div class="card-header">
-            <span class="card-title">${group.name}</span>
-            <span style="font-size: 10px; color: var(--cyan); font-weight: 800;">CH ${idx + 1}</span>
+            <div>
+              <span class="card-title">${group.name}</span>
+              <span style="font-size: 10px; color: var(--cyan); font-weight: 800; margin-left: 4px;">CH ${idx + 1}</span>
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <button type="button" class="mini-btn mute ${isMute ? 'active' : ''}" data-group="${group.id}" onclick="toggleMute('${group.id}')">M</button>
+              <button type="button" class="mini-btn solo ${isSolo ? 'active' : ''}" data-group="${group.id}" onclick="toggleSolo('${group.id}')">S</button>
+            </div>
           </div>
           <div class="card-sliders">
             <div class="slider-row">
@@ -481,15 +591,91 @@
       });
     }
 
-    window.onSliderChange = (groupId, paramId, value) => {
+    window.toggleMute = (groupId) => {
+      const g = currentDeck.find(grp => grp.id === groupId);
+      const isMute = !(g && g.params && g.params.mute);
+      if (g) {
+        if (!g.params) g.params = {};
+        g.params.mute = isMute;
+      }
+      const btn = document.querySelector(`.mini-btn.mute[data-group="${groupId}"]`);
+      if (btn) btn.classList.toggle('active', isMute);
+      sendParam(groupId, 'mute', isMute);
+    };
+
+    window.toggleSolo = (groupId) => {
+      const g = currentDeck.find(grp => grp.id === groupId);
+      const isSolo = !(g && g.params && g.params.solo);
+      if (g) {
+        if (!g.params) g.params = {};
+        g.params.solo = isSolo;
+      }
+      const btn = document.querySelector(`.mini-btn.solo[data-group="${groupId}"]`);
+      if (btn) btn.classList.toggle('active', isSolo);
+      sendParam(groupId, 'solo', isSolo);
+    };
+
+    window.toggleTestPattern = () => {
+      isTestPattern = !isTestPattern;
+      sendWs({ type: 'panic_action', action: 'test_pattern', value: isTestPattern });
+      updatePanicUi();
+    };
+
+    window.toggleBlackout = () => {
+      isBlackout = !isBlackout;
+      sendWs({ type: 'panic_action', action: 'blackout', value: isBlackout });
+      updatePanicUi();
+    };
+
+    window.toggleFreeze = () => {
+      isFreeze = !isFreeze;
+      sendWs({ type: 'panic_action', action: 'freeze', value: isFreeze });
+      updatePanicUi();
+    };
+
+    window.triggerFxKill = () => {
+      sendWs({ type: 'panic_action', action: 'fx_kill', value: true });
+      currentDeck.forEach(g => { if (g.params) g.params.opacity = 0; });
+      renderChannels();
+    };
+
+    function updatePanicUi() {
+      const tpBtn = document.getElementById('btn-test-pattern');
+      if (tpBtn) tpBtn.classList.toggle('active', isTestPattern);
+      const boBtn = document.getElementById('btn-blackout');
+      if (boBtn) boBtn.classList.toggle('blackout-active', isBlackout);
+      const fzBtn = document.getElementById('btn-freeze');
+      if (fzBtn) fzBtn.classList.toggle('freeze-active', isFreeze);
+    }
+
+    function sendParam(groupId, paramId, value) {
       sendWs({
         type: 'param_update',
         deckId: deckId,
         groupId: groupId,
         layerId: null,
         paramId: paramId,
-        value: parseFloat(value),
+        value: value,
       });
+    }
+
+    // Keyboard Shortcuts (Space: Blackout, F: Freeze, K: FX Kill, T: Test Pattern)
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleBlackout();
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFreeze();
+      } else if (e.key === 'k' || e.key === 'K') {
+        triggerFxKill();
+      } else if (e.key === 't' || e.key === 'T') {
+        toggleTestPattern();
+      }
+    });
+
+    window.onSliderChange = (groupId, paramId, value) => {
+      sendParam(groupId, paramId, parseFloat(value));
       const el = event.target.parentElement.querySelector('.val-text');
       if (el) el.textContent = Math.round(value) + '%';
     };
@@ -532,18 +718,6 @@
       }
     }
 
-    let isTestPattern = true;
-
-    window.toggleTestPattern = () => {
-      isTestPattern = !isTestPattern;
-      sendWs({ type: 'panic_action', action: 'test_pattern', value: isTestPattern });
-      updateTestPatternUi();
-    };
-
-    function updateTestPatternUi() {
-      const btn = document.getElementById('btn-test-pattern');
-      if (btn) btn.classList.toggle('active', isTestPattern);
-    }
 
     // Spout & System Status Poller
     async function pollSpoutStatus() {
@@ -559,9 +733,38 @@
         if (adapterEl && data.adapter_name) {
           adapterEl.textContent = data.adapter_name;
         }
+        if (typeof data.effect_mode === 'number') {
+          updateShaderModeUi(data.effect_mode);
+        }
       } catch (e) {}
     }
     setInterval(pollSpoutStatus, 2000);
+
+    const modeLabels = {
+      0: 'TEST PATTERN',
+      1: '3D CYBER TUNNEL',
+      2: 'RAYMARCH CORE',
+      3: 'NEON WAVE GRID',
+      4: 'ACID GLITCH',
+      5: '4CH COMPOSITE'
+    };
+
+    function updateShaderModeUi(mode) {
+      const label = document.getElementById('hud-shader-mode');
+      if (label) {
+        label.textContent = modeLabels[mode] || ('MODE ' + mode);
+        label.style.color = mode === 0 ? 'var(--warning-yellow)' : 'var(--neon-green)';
+      }
+    }
+
+    window.setShaderMode = async (mode) => {
+      try {
+        await fetch(`/api/spout_effect_mode?mode=${mode}`, { method: 'POST' });
+        updateShaderModeUi(mode);
+      } catch (e) {
+        console.error('Failed to set shader mode:', e);
+      }
+    };
 
     window.switchGpuAdapter = async (idx) => {
       try {

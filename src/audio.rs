@@ -33,11 +33,60 @@ pub struct AudioAnalysisResult {
     pub high_energy: f32,
 }
 
+/// リアルタイムレンダラー向け 超低遅延ロックフリー オーディオ指標
+#[derive(Debug)]
+pub struct LiveAudioMetrics {
+    pub low: std::sync::atomic::AtomicU32,  // f32 as u32 bits
+    pub mid: std::sync::atomic::AtomicU32,
+    pub high: std::sync::atomic::AtomicU32,
+    pub beat: std::sync::atomic::AtomicU32,
+    pub bpm: std::sync::atomic::AtomicU32,
+}
+
+impl Default for LiveAudioMetrics {
+    fn default() -> Self {
+        Self {
+            low: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            mid: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            high: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            beat: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            bpm: std::sync::atomic::AtomicU32::new(128.0f32.to_bits()),
+        }
+    }
+}
+
+impl LiveAudioMetrics {
+    pub fn get_low(&self) -> f32 {
+        f32::from_bits(self.low.load(Ordering::Relaxed))
+    }
+    pub fn get_mid(&self) -> f32 {
+        f32::from_bits(self.mid.load(Ordering::Relaxed))
+    }
+    pub fn get_high(&self) -> f32 {
+        f32::from_bits(self.high.load(Ordering::Relaxed))
+    }
+    pub fn get_beat(&self) -> f32 {
+        f32::from_bits(self.beat.load(Ordering::Relaxed))
+    }
+    pub fn get_bpm(&self) -> f32 {
+        f32::from_bits(self.bpm.load(Ordering::Relaxed))
+    }
+
+    pub fn set_metrics(&self, low: f32, mid: f32, high: f32, beat: f32, bpm: f32) {
+        self.low.store(low.to_bits(), Ordering::Relaxed);
+        self.mid.store(mid.to_bits(), Ordering::Relaxed);
+        self.high.store(high.to_bits(), Ordering::Relaxed);
+        self.beat.store(beat.to_bits(), Ordering::Relaxed);
+        self.bpm.store(bpm.to_bits(), Ordering::Relaxed);
+    }
+}
+
 /// オーディオマネージャー
 pub struct AudioDspEngine {
     tx: broadcast::Sender<Vec<u8>>,
     is_running: Arc<AtomicBool>,
     flywheel_bpm: Arc<Mutex<f64>>,
+    pub metrics: Arc<LiveAudioMetrics>,
 }
 
 impl AudioDspEngine {
@@ -45,11 +94,13 @@ impl AudioDspEngine {
         let (tx, rx) = broadcast::channel(broadcast_capacity);
         let is_running = Arc::new(AtomicBool::new(false));
         let flywheel_bpm = Arc::new(Mutex::new(128.0));
+        let metrics = Arc::new(LiveAudioMetrics::default());
 
         let engine = Self {
             tx,
             is_running,
             flywheel_bpm,
+            metrics,
         };
 
         (engine, rx)
@@ -64,6 +115,7 @@ impl AudioDspEngine {
         let is_running = Arc::clone(&self.is_running);
         let tx = self.tx.clone();
         let flywheel_bpm = Arc::clone(&self.flywheel_bpm);
+        let metrics = Arc::clone(&self.metrics);
 
         std::thread::spawn(move || {
             tracing::info!("Initializing WASAPI Loopback Audio Capture...");
@@ -73,7 +125,7 @@ impl AudioDspEngine {
                 Some(d) => d,
                 None => {
                     tracing::warn!("No default output device found, entering synthetic mode");
-                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm);
+                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm, metrics);
                     return;
                 }
             };
@@ -82,7 +134,7 @@ impl AudioDspEngine {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!("Failed to get default audio config: {e}, entering synthetic mode");
-                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm);
+                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm, metrics);
                     return;
                 }
             };
@@ -116,7 +168,7 @@ impl AudioDspEngine {
                 ),
                 _ => {
                     tracing::warn!("Unsupported sample format, entering synthetic mode");
-                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm);
+                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm, metrics);
                     return;
                 }
             };
@@ -125,14 +177,14 @@ impl AudioDspEngine {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::warn!("Failed to build input stream: {e}, entering synthetic mode");
-                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm);
+                    Self::run_synthetic_loop(is_running, tx, flywheel_bpm, metrics);
                     return;
                 }
             };
 
             if let Err(e) = stream.play() {
                 tracing::warn!("Failed to play stream: {e}, entering synthetic mode");
-                Self::run_synthetic_loop(is_running, tx, flywheel_bpm);
+                Self::run_synthetic_loop(is_running, tx, flywheel_bpm, metrics);
                 return;
             }
 
@@ -193,9 +245,11 @@ impl AudioDspEngine {
                 }
 
                 // ビート検出とBPMトラッキング
+                let mut is_beat = false;
                 if low_energy > last_energy * 1.35 && low_energy > 0.02 {
                     let elapsed = last_beat_time.elapsed().as_secs_f64();
                     if (0.3..=1.0).contains(&elapsed) {
+                        is_beat = true;
                         let instant_bpm = 60.0 / elapsed;
                         bpm_history.push(instant_bpm);
                         if bpm_history.len() > 8 {
@@ -210,6 +264,14 @@ impl AudioDspEngine {
                 }
                 last_energy = low_energy * 0.7 + last_energy * 0.3;
 
+                // GPU シェーダー向け ロックフリー指標を更新
+                let current_bpm = *flywheel_bpm.lock().unwrap_or_else(|e| e.into_inner());
+                let mid_energy = (spectrum_bytes[15..35].iter().map(|&v| v as f32).sum::<f32>() / (20.0 * 255.0)).clamp(0.0, 1.0);
+                let high_energy = (spectrum_bytes[80..130].iter().map(|&v| v as f32).sum::<f32>() / (50.0 * 255.0)).clamp(0.0, 1.0);
+                let norm_low = (low_energy * 2.5).clamp(0.0, 1.0);
+                let beat_val = if is_beat { 1.0 } else { 0.0 };
+                metrics.set_metrics(norm_low, mid_energy, high_energy, beat_val, current_bpm as f32);
+
                 // 全クライアントへ512bandバイナリ配信
                 let _ = tx.send(spectrum_bytes);
             }
@@ -221,6 +283,7 @@ impl AudioDspEngine {
         is_running: Arc<AtomicBool>,
         tx: broadcast::Sender<Vec<u8>>,
         flywheel_bpm: Arc<Mutex<f64>>,
+        metrics: Arc<LiveAudioMetrics>,
     ) {
         std::thread::spawn(move || {
             let mut phase = 0.0f32;
@@ -237,6 +300,12 @@ impl AudioDspEngine {
                     let val = (beat_pulse * freq_decay * 255.0 * 0.8) as u8;
                     spectrum_bytes[i] = val;
                 }
+
+                // 合成モードの指標更新
+                let low = beat_pulse * 0.8;
+                let mid = (phase * 1.5).sin().abs() * 0.6;
+                let high = (phase * 3.0).cos().abs() * 0.5;
+                metrics.set_metrics(low, mid, high, beat_pulse, current_bpm as f32);
 
                 let _ = tx.send(spectrum_bytes);
             }
